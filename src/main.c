@@ -57,8 +57,8 @@ static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 
 uint16_t ADC_Result=0;
-const int period=10000;
-const int period_pwm=10000/2;
+const int period=50000;
+const int period_pwm=50000;
 
 
 struct coil_status
@@ -193,7 +193,7 @@ int main(void)
     {  
           if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_RESET))
           {
-              if ((ADC_Result > 0x76c) && (ADC_Result < 0x834)) // 0x7EE 2030  0x76c 2900  0x834 290
+              if (((ADC_Result > 1600) && (ADC_Result < 2600)) || (ADC_Result == 0)) // 0x7EE 2030  0x76c 2900  0x834 290
               {
                   control.f_l = 1;
                   control.b_l = 1;
@@ -202,14 +202,14 @@ int main(void)
               }
               else
               {
-                  if (ADC_Result < 0x76c) //L
+                  if (ADC_Result < 1850) //L
                   {
                       control.f_l = 0;
                       control.b_l = 0;
                       control.f_r = 1;
                       control.b_r = 1;
                   }
-                  if (ADC_Result > 0x834) //R
+                  if (ADC_Result > 2250) //R
                   {
                       control.f_l = 1;
                       control.b_l = 1;
