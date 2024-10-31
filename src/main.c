@@ -57,13 +57,13 @@ static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 
 uint16_t ADC_Result=0;
-const int period=50000;
-const int period_drive=50000/1.5;
-const int period_brake=50000/2;
-const int period_bort=50000;
+const int period=40000;
+const int period_drive=40000/1.3;
+const int period_brake=40000/1.3;
+const int period_bort=40000;
 const int center_angle=2050;
-const int left_angle=626;
-const int right_angle=3680;
+const int left_angle=400;
+const int right_angle=3710;
 int angle_diff;
 int period_calc;
 
@@ -233,18 +233,18 @@ int main(void)
                 control.b_r = period_calc;
               }
               if(angle_diff < 0) {
-                period_calc = (period_drive/(left_angle-center_angle))*((right_angle-center_angle)+angle_diff);
+                period_calc = (period_drive/(left_angle-center_angle))*((left_angle-center_angle)-angle_diff);
                 control.f_l = period_calc;
                 control.b_l = period_calc;
                 control.f_r = period_drive;
                 control.b_r = period_drive;
               }
-              else {
-                control.f_l = period_drive;
-                control.b_l = period_drive;
-                control.f_r = period_drive;
-                control.b_r = period_drive;
-              }
+              // else {
+              //   control.f_l = period_drive;
+              //   control.b_l = period_drive;
+              //   control.f_r = period_drive;
+              //   control.b_r = period_drive;
+              // }
 
              
           }
