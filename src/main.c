@@ -66,6 +66,7 @@ const int left_angle=400;
 const int right_angle=3710;
 int angle_diff;
 int period_calc;
+int period_read;
 
 struct coil_status
 {
@@ -99,7 +100,7 @@ struct down_timer
    int b_l;   
 };
 
-struct coil_status coil = {0,0,0,0};
+struct coil_status coil;
 struct control_status control =  {0,0,0,0};
 struct down_timer dt = {0,0,0,0};
 struct pwm_value pwm = {0,0,0,0};
@@ -277,64 +278,93 @@ int main(void)
               // }
           }
     }
+  period_read = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1);
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((coil.f_r == 0) && (control.f_r > 0)) {
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) == 0) && (control.f_r > 0) && (coil.f_r == 0)) {                    
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, period);
           coil.f_r = 1;          
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, control.f_r);           
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
+          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
         }       
-        if ((coil.f_r == 1) && (control.f_r == 0)) {
-          coil.f_r = 0;          
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);          
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) > 0) && (coil.f_r == 0)) {
+          if (control.f_r == 0){                  
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+          coil.f_r = 2;          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
+          }
+          if (control.f_r > 0) {
+            if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) != control.f_r) && (coil.f_r == 0)){
+              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, control.f_r);        
+            }
+          }        
         }
       }
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_2) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((coil.f_l == 0) && (control.f_l > 0)) {
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) == 0) && (control.f_l > 0) && (coil.f_l == 0)) {                    
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);
           coil.f_l = 1;          
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_l);           
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
+          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
         }       
-        if ((coil.f_l == 1) && (control.f_l == 0)) {
-          coil.f_l = 0;          
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);          
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) > 0) && (coil.f_l == 0)) {
+          if (control.f_l == 0){                  
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+          coil.f_l = 2;          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
+          }
+          if (control.f_l > 0) {
+            if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) != control.f_l) && (coil.f_l == 0)){
+              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_l);        
+            }
+          }        
         }
       }
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((coil.b_r == 0) && (control.b_r > 0)) {
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) == 0) && (control.b_r > 0) && (coil.b_r == 0)) {                    
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, period);
           coil.b_r = 1;          
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
+          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);          
         }       
-        if ((coil.b_r == 1) && (control.b_r == 0)) {
-          coil.b_r = 0;      
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);          
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) > 0) && (coil.b_r == 0)) {
+          if (control.b_r == 0){                  
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);
+          coil.b_r = 2;          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
+          }
+          if (control.b_r > 0) {
+            if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) != control.b_r) && (coil.b_r == 0)){
+              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);        
+            }
+          }        
         }
       }
   
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_4) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((coil.b_l == 0) && (control.b_l > 0)) {
-          coil.b_l = 1;   
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);          
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) == 0) && (control.b_l > 0) && (coil.b_l == 0)) {                    
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period);
+          coil.b_l = 1;          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4);
+          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4);          
         }       
-        if ((coil.b_l == 1) && (control.b_l == 0)) {
-          coil.b_l = 0;         
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);          
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) > 0) && (coil.b_l == 0)) {
+          if (control.b_l == 0){                  
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+          coil.b_l = 2;          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4);
+          }
+          if (control.b_l > 0) {
+            if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) != control.b_l) && (coil.b_l == 0)){
+              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);        
+            }
+          }        
         }
       }
  //     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 2000);
@@ -621,52 +651,48 @@ static void MX_GPIO_Init(void)
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {  
     if (htim->Instance == TIM1){
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1){
-      if ( coil.f_r == 1){
-      //coil.f_r = 1;           
+      if (coil.f_r == 1){                 
       __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, control.f_r);
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_1);
+      coil.f_r = 0;
+      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_1);      
       } 
-      if ( coil.f_r == 0){
-      //coil.f_r = 0;           
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+      if (coil.f_r == 2){
+      coil.f_r = 0;   
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_1);
       }       
     } 
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2){
-      if ( coil.f_l == 1){
-      //coil.f_l = 1;           
+      if (coil.f_l == 1){                 
       __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_l);
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);
+      coil.f_l = 0;
+      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);      
       } 
-      if ( coil.f_l == 0){
-      //coil.f_l = 0;           
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+      if (coil.f_l == 2){
+      coil.f_l = 0;   
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);
-      }       
+      }      
     } 
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){
-      if ( coil.b_r == 1){
-      //coil.b_r = 1;           
+      if (coil.b_r == 1){                 
       __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);
+      coil.b_r = 0;
+      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);      
       } 
-      if ( coil.b_r == 0){
-      //coil.b_r = 0;           
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);
+      if (coil.b_r == 2){
+      coil.b_r = 0;   
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);
       }    
     } 
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4){
-      if ( coil.b_l == 1){
-      //coil.b_l = 1;           
+      if (coil.b_l == 1){                 
       __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
+      coil.b_l = 0;
+      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);      
       } 
-      if ( coil.b_l == 0){
-      //coil.b_l = 0;           
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+      if (coil.b_l == 2){
+      coil.b_l = 0;   
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
-      }   
+      }  
     } 
     } 
 }
