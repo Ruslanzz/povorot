@@ -58,8 +58,14 @@ static void MX_TIM1_Init(void);
 
 uint16_t ADC_Result=0;
 const int period=50000;
-const int period_pwm=50000;
-
+const int period_drive=50000/1.5;
+const int period_brake=50000/2;
+const int period_bort=50000;
+const int center_angle=2050;
+const int left_angle=626;
+const int right_angle=3680;
+int angle_diff;
+int period_calc;
 
 struct coil_status
 {
@@ -184,48 +190,72 @@ int main(void)
 
     if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_SET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_SET))
     {
-        control.f_l = 1;
-        control.b_l = 1;
-        control.f_r = 1;
-        control.b_r = 1;
+        control.f_l = period_brake;
+        control.b_l = period_brake;
+        control.f_r = period_brake;
+        control.b_r = period_brake;
     } 
     else 
     {  
           if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_RESET))
           {
-              if (((ADC_Result > 1600) && (ADC_Result < 2600)) || (ADC_Result == 0)) // 0x7EE 2030  0x76c 2900  0x834 290
-              {
-                  control.f_l = 1;
-                  control.b_l = 1;
-                  control.f_r = 1;
-                  control.b_r = 1;
+              // if (((ADC_Result > 1600) && (ADC_Result < 2600)) || (ADC_Result == 0)) // 0x7EE 2030  0x76c 2900  0x834 290
+              // {
+              //     control.f_l = period_drive;
+              //     control.b_l = period_drive;
+              //     control.f_r = period_drive;
+              //     control.b_r = period_drive;
+              // }
+              // else
+              // {
+              //     if (ADC_Result < 1850) //L
+              //     {
+              //         control.f_l = 0;
+              //         control.b_l = 0;
+              //         control.f_r = 1;
+              //         control.b_r = 1;
+              //     }
+              //     if (ADC_Result > 2250) //R
+              //     {
+              //         control.f_l = 1;
+              //         control.b_l = 1;
+              //         control.f_r = 0;
+              //         control.b_r = 0;
+              //     }
+              // }
+
+              angle_diff = ADC_Result-center_angle;
+              if(angle_diff > 0){
+                period_calc = (period_drive/(right_angle-center_angle))*((right_angle-center_angle)-angle_diff);
+                control.f_l = period_drive;
+                control.b_l = period_drive;
+                control.f_r = period_calc;
+                control.b_r = period_calc;
               }
-              else
-              {
-                  if (ADC_Result < 1850) //L
-                  {
-                      control.f_l = 0;
-                      control.b_l = 0;
-                      control.f_r = 1;
-                      control.b_r = 1;
-                  }
-                  if (ADC_Result > 2250) //R
-                  {
-                      control.f_l = 1;
-                      control.b_l = 1;
-                      control.f_r = 0;
-                      control.b_r = 0;
-                  }
+              if(angle_diff < 0) {
+                period_calc = (period_drive/(left_angle-center_angle))*((right_angle-center_angle)+angle_diff);
+                control.f_l = period_calc;
+                control.b_l = period_calc;
+                control.f_r = period_drive;
+                control.b_r = period_drive;
               }
+              else {
+                control.f_l = period_drive;
+                control.b_l = period_drive;
+                control.f_r = period_drive;
+                control.b_r = period_drive;
+              }
+
+             
           }
           else 
           {
               if ((HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_SET))// R
               {   
                   control.f_l = 0;
-                  control.f_r = 1;
+                  control.f_r = period_bort;
                   control.b_l = 0;
-                  control.b_r = 1;  
+                  control.b_r = period_bort;  
               }
               // else
               // {
@@ -235,9 +265,9 @@ int main(void)
 
               if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_SET))// L
               {   
-                  control.f_l = 1;
+                  control.f_l = period_bort;
                   control.f_r = 0;
-                  control.b_l = 1;
+                  control.b_l = period_bort;
                   control.b_r = 0;         
               }
               // else
@@ -249,9 +279,9 @@ int main(void)
     }
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((coil.f_r == 0) && (control.f_r == 1)) {
+        if ((coil.f_r == 0) && (control.f_r > 0)) {
           coil.f_r = 1;          
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, period);           
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, control.f_r);           
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
         }       
@@ -264,9 +294,9 @@ int main(void)
       }
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_2) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((coil.f_l == 0) && (control.f_l == 1)) {
+        if ((coil.f_l == 0) && (control.f_l > 0)) {
           coil.f_l = 1;          
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);           
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_l);           
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
         }       
@@ -279,9 +309,9 @@ int main(void)
       }
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((coil.b_r == 0) && (control.b_r == 1)) {
+        if ((coil.b_r == 0) && (control.b_r > 0)) {
           coil.b_r = 1;          
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, period);          
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
         }       
@@ -294,9 +324,9 @@ int main(void)
       }
   
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_4) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((coil.b_l == 0) && (control.b_l == 1)) {
+        if ((coil.b_l == 0) && (control.b_l > 0)) {
           coil.b_l = 1;   
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period);          
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4);
         }       
@@ -593,7 +623,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1){
       if ( coil.f_r == 1){
       //coil.f_r = 1;           
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, period_pwm);
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, control.f_r);
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_1);
       } 
       if ( coil.f_r == 0){
@@ -605,7 +635,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2){
       if ( coil.f_l == 1){
       //coil.f_l = 1;           
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period_pwm);
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_l);
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);
       } 
       if ( coil.f_l == 0){
@@ -617,7 +647,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){
       if ( coil.b_r == 1){
       //coil.b_r = 1;           
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, period_pwm);
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);
       } 
       if ( coil.b_r == 0){
@@ -629,7 +659,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4){
       if ( coil.b_l == 1){
       //coil.b_l = 1;           
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period_pwm);
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
       } 
       if ( coil.b_l == 0){
