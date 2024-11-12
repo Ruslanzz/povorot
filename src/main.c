@@ -57,10 +57,10 @@ static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 
 uint16_t ADC_Result=0;
-const int period=50000;
-const int period_drive=50000/1.2;
-const int period_brake=50000/1.2;
-const int period_bort=50000;
+const int period=1000;
+const int period_drive=1000/5;
+const int period_brake=1000/5;
+const int period_bort=1000;
 const int center_angle=2050;
 const int left_angle=400;
 const int right_angle=3710;
@@ -70,40 +70,32 @@ int period_read;
 
 struct coil_status
 {
-   int f_r;
-   int f_l;
-   int b_r;
-   int b_l;   
+   int r;
+   int l;  
 };
 
 struct control_status
 {
-   int f_r;
-   int f_l;
-   int b_r;
-   int b_l;   
+   int r;
+   int l;  
 };
 
 struct pwm_value
 {
-   int f_r;
-   int f_l;
-   int b_r;
-   int b_l;   
+   int r;
+   int l;   
 };
 
 struct down_timer
 {
-   int f_r;
-   int f_l;
-   int b_r;
-   int b_l;   
+   int r;
+   int l;  
 };
 
 struct coil_status coil;
-struct control_status control =  {0,0,0,0};
-struct down_timer dt = {0,0,0,0};
-struct pwm_value pwm = {0,0,0,0};
+struct control_status control =  {0,0};
+struct down_timer dt = {0,0};
+struct pwm_value pwm = {0,0};
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -111,24 +103,6 @@ struct pwm_value pwm = {0,0,0,0};
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// void check_coil_status(struct coil_status s) 
-// {
-   
-//    x = (control.f_l == control_new.f_l) ? 1 : 0;
-//    if (x == 0)
-//    {
-//       if (TIM_CHANNEL_STATE_GET(htim, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
-//         if ((coil.f_l == 0) && (control_new.f_l == 1)) {          
-//           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, period);  
-//           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
-//         }
-//         if ((coil.f_l == 1) && (control_new.f_l == 0)) {          
-//           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);  
-//           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
-//         }
-//       }
-//    }    
-// }
 /* USER CODE END 0 */
 
 /**
@@ -184,189 +158,167 @@ int main(void)
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);  
   while (1)
   {
-    /* USER CODE END WHILE */
-    HAL_ADC_Start(&hadc1); // запускаем преобразование сигнала АЦП
-    HAL_ADC_PollForConversion(&hadc1, 100);
-    ADC_Result = HAL_ADC_GetValue(&hadc1);
-
-    if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_SET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_SET))
-    {
-        control.f_l = period_brake;
-        control.b_l = period_brake;
-        control.f_r = period_brake;
-        control.b_r = period_brake;
-    } 
-    else 
-    {  
-          if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_RESET))
-          {
-              // if (((ADC_Result > 1600) && (ADC_Result < 2600)) || (ADC_Result == 0)) // 0x7EE 2030  0x76c 2900  0x834 290
-              // {
-              //     control.f_l = period_drive;
-              //     control.b_l = period_drive;
-              //     control.f_r = period_drive;
-              //     control.b_r = period_drive;
-              // }
-              // else
-              // {
-              //     if (ADC_Result < 1850) //L
-              //     {
-              //         control.f_l = 0;
-              //         control.b_l = 0;
-              //         control.f_r = 1;
-              //         control.b_r = 1;
-              //     }
-              //     if (ADC_Result > 2250) //R
-              //     {
-              //         control.f_l = 1;
-              //         control.b_l = 1;
-              //         control.f_r = 0;
-              //         control.b_r = 0;
-              //     }
-              // }
-
-              angle_diff = ADC_Result-center_angle;
-              if(angle_diff > 0){
-                period_calc = (period_drive/(right_angle-center_angle))*((right_angle-center_angle)-angle_diff);
-                control.f_l = period_drive;
-                control.b_l = period_drive;
-                control.f_r = period_calc;
-                control.b_r = period_calc;
-              }
-              if(angle_diff < 0) {
-                period_calc = (period_drive/(left_angle-center_angle))*((left_angle-center_angle)-angle_diff);
-                control.f_l = period_calc;
-                control.b_l = period_calc;
-                control.f_r = period_drive;
-                control.b_r = period_drive;
-              }
-              // else {
-              //   control.f_l = period_drive;
-              //   control.b_l = period_drive;
-              //   control.f_r = period_drive;
-              //   control.b_r = period_drive;
-              // }
+    // /* USER CODE END WHILE */
+    // if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_SET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_SET))
+    // {
+    //     control.r = period_brake;
+    //     control.l = period_brake;
+    // } 
+    // else 
+    // {  
+    //       if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_RESET))
+    //       {
+    //           angle_diff = ADC_Result-center_angle;
+    //           if(angle_diff > 0){
+    //             period_calc = (period_drive/(right_angle-center_angle))*((right_angle-center_angle)-angle_diff);
+    //             control.f_l = period_drive;
+    //             control.b_l = period_drive;
+    //             control.f_r = period_calc;
+    //             control.b_r = period_calc;
+    //           }
+    //           if(angle_diff < 0) {
+    //             period_calc = (period_drive/(left_angle-center_angle))*((left_angle-center_angle)-angle_diff);
+    //             control.f_l = period_calc;
+    //             control.b_l = period_calc;
+    //             control.f_r = period_drive;
+    //             control.b_r = period_drive;
+    //           }
+    //           // else {
+    //           //   control.f_l = period_drive;
+    //           //   control.b_l = period_drive;
+    //           //   control.f_r = period_drive;
+    //           //   control.b_r = period_drive;
+    //           // }
 
              
-          }
-          else 
-          {
-              if ((HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_SET))// R
-              {   
-                  control.f_l = period_bort;
-                  control.f_r = 0;
-                  control.b_l = period_bort;
-                  control.b_r = 0;  
-              }
-              // else
-              // {
-              //     control.f_r = 0;
-              //     control.b_r = 0;
-              // }
+    //       }
+    //       else 
+    //       {
+    //           if ((HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_SET))// R
+    //           {   
+    //               control.f_l = period_bort;
+    //               control.f_r = 0;
+    //               control.b_l = period_bort;
+    //               control.b_r = 0;  
+    //           }
+    //           // else
+    //           // {
+    //           //     control.f_r = 0;
+    //           //     control.b_r = 0;
+    //           // }
 
-              if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_SET))// L
-              {   
-                  control.f_l = 0;
-                  control.f_r = period_bort;
-                  control.b_l = 0;
-                  control.b_r = period_bort;         
-              }
-              // else
-              // {
-              //     control.f_l = 0;
-              //     control.b_l = 0;
-              // }
-          }
-    }
-  period_read = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1);
+    //           if ((HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_RESET) && (HAL_GPIO_ReadPin (GPIOB, RIGHT_BRAKE_Pin) == GPIO_PIN_SET))// L
+    //           {   
+    //               control.f_l = 0;
+    //               control.f_r = period_bort;
+    //               control.b_l = 0;
+    //               control.b_r = period_bort;         
+    //           }
+    //           // else
+    //           // {
+    //           //     control.f_l = 0;
+    //           //     control.b_l = 0;
+    //           // }
+    //       }
+    // }
+
+  if (HAL_GPIO_ReadPin (GPIOB, LEFT_BRAKE_Pin) == GPIO_PIN_RESET){
+    control.l = 0;
+  }
+  else {
+    control.l = 500;
+  }
+  
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) == 0) && (control.f_l > 0) && (coil.f_l == 0)) {                    
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) == 0) && (control.l > 0) && (coil.l == 0)) {                    
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, period);
-          coil.f_l = 1;          
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);
+          coil.l = 1;          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
         }       
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) > 0) && (coil.f_l == 0)) {
-          if (control.f_l == 0){                  
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) > 0) && (coil.l == 0)) {
+          if (control.l == 0){                  
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-          coil.f_l = 2;          
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+          coil.l = 2;          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
           }
-          if (control.f_l > 0) {
-            if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) != control.f_l) && (coil.f_l == 0)){
-              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, control.f_l);        
-            }
-          }        
+          // if (control.l > 0) {
+          //   if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) != control.l) && (coil.l == 0)){
+          // __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, control.f_l);        
+          //   }
+          // }        
         }
       }
 
-  if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_2) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) == 0) && (control.f_r > 0) && (coil.f_r == 0)) {                    
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);
-          coil.f_r = 1;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
-        }       
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) > 0) && (coil.f_r == 0)) {
-          if (control.f_r == 0){                  
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
-          coil.f_r = 2;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
-          }
-          if (control.f_r > 0) {
-            if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) != control.f_r) && (coil.f_r == 0)){
-              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_r);        
-            }
-          }        
-        }
-      }
+  // if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_2) == HAL_TIM_CHANNEL_STATE_READY) {
+  //       if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) == 0) && (control.f_r > 0) && (coil.f_r == 0)) {                    
+  //         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);
+  //         coil.f_r = 1;          
+  //         __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+  //         HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
+  //       }       
+  //       if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) > 0) && (coil.f_r == 0)) {
+  //         if (control.f_r == 0){                  
+  //         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+  //         coil.f_r = 2;          
+  //         __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+  //         HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
+  //         }
+  //         if (control.f_r > 0) {
+  //           if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) != control.f_r) && (coil.f_r == 0)){
+  //             __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_r);        
+  //           }
+  //         }        
+  //       }
+  //     }
 
-  if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) == 0) && (control.b_r > 0) && (coil.b_r == 0)) {                    
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, period);
-          coil.b_r = 1;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);          
-        }       
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) > 0) && (coil.b_r == 0)) {
-          if (control.b_r == 0){                  
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);
-          coil.b_r = 2;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
-          }
-          if (control.b_r > 0) {
-            if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) != control.b_r) && (coil.b_r == 0)){
-              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);        
-            }
-          }        
-        }
-      }
+  // if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
+  //       if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) == 0) && (control.b_r > 0) && (coil.b_r == 0)) {                    
+  //         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, period);
+  //         coil.b_r = 1;          
+  //         __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+  //         HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);          
+  //       }       
+  //       if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) > 0) && (coil.b_r == 0)) {
+  //         if (control.b_r == 0){                  
+  //         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);
+  //         coil.b_r = 2;          
+  //         __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+  //         HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
+  //         }
+  //         if (control.b_r > 0) {
+  //           if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) != control.b_r) && (coil.b_r == 0)){
+  //             __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);        
+  //           }
+  //         }        
+  //       }
+  //     }
   
-  if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_4) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) == 0) && (control.b_l > 0) && (coil.b_l == 0)) {                    
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period);
-          coil.b_l = 1;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4);          
-        }       
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) > 0) && (coil.b_l == 0)) {
-          if (control.b_l == 0){                  
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
-          coil.b_l = 2;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4);
-          }
-          if (control.b_l > 0) {
-            if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) != control.b_l) && (coil.b_l == 0)){
-              __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);        
-            }
-          }        
-        }
-      }
+  // if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_4) == HAL_TIM_CHANNEL_STATE_READY) {
+  //       if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) == 0) && (control.b_l > 0) && (coil.b_l == 0)) {                    
+  //         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period);
+  //         coil.b_l = 1;          
+  //         __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+  //         HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4);          
+  //       }       
+  //       if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) > 0) && (coil.b_l == 0)) {
+  //         if (control.b_l == 0){                  
+  //         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
+  //         coil.b_l = 2;          
+  //         __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+  //         HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4);
+  //         }
+  //         if (control.b_l > 0) {
+  //           if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) != control.b_l) && (coil.b_l == 0)){
+  //             __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);        
+  //           }
+  //         }        
+  //       }
+  //     }
  //     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 2000);
 
     /* USER CODE BEGIN 3 */
@@ -651,49 +603,49 @@ static void MX_GPIO_Init(void)
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {  
     if (htim->Instance == TIM1){
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1){
-      if (coil.f_l == 1){                 
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, control.f_l);
-      coil.f_l = 0;
+      if (coil.l == 1){                 
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, period_drive);
+      coil.l = 0;
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_1);      
       } 
-      if (coil.f_l == 2){
-      coil.f_l = 0;   
+      if (coil.l == 2){
+      coil.l = 0;   
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_1);
       }       
     } 
-    if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2){
-      if (coil.f_r == 1){                 
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_r);
-      coil.f_r = 0;
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);      
-      } 
-      if (coil.f_r == 2){
-      coil.f_r = 0;   
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);
-      }      
-    } 
-    if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){
-      if (coil.b_r == 1){                 
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);
-      coil.b_r = 0;
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);      
-      } 
-      if (coil.b_r == 2){
-      coil.b_r = 0;   
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);
-      }    
-    } 
-    if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4){
-      if (coil.b_l == 1){                 
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);
-      coil.b_l = 0;
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);      
-      } 
-      if (coil.b_l == 2){
-      coil.b_l = 0;   
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
-      }  
-    } 
+    // if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2){
+    //   if (coil.f_r == 1){                 
+    //   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, control.f_r);
+    //   coil.f_r = 0;
+    //   HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);      
+    //   } 
+    //   if (coil.f_r == 2){
+    //   coil.f_r = 0;   
+    //   HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);
+    //   }      
+    // } 
+    // if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){
+    //   if (coil.b_r == 1){                 
+    //   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, control.b_r);
+    //   coil.b_r = 0;
+    //   HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);      
+    //   } 
+    //   if (coil.b_r == 2){
+    //   coil.b_r = 0;   
+    //   HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);
+    //   }    
+    // } 
+    // if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4){
+    //   if (coil.b_l == 1){                 
+    //   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, control.b_l);
+    //   coil.b_l = 0;
+    //   HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);      
+    //   } 
+    //   if (coil.b_l == 2){
+    //   coil.b_l = 0;   
+    //   HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
+    //   }  
+    // } 
     } 
 }
 /* USER CODE END 4 */
