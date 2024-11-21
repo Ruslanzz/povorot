@@ -61,7 +61,7 @@ static void MX_TIM1_Init(void);
 
 int adc_left=0;
 int adc_right=0;
-const int period=20475;
+const int period=8190;
 int period_calc_left;
 int period_calc_right;
 
@@ -152,15 +152,17 @@ int main(void)
       period_calc_left = period;
     }
     else {
-      period_calc_left = period-adc_left*5;
+      period_calc_left = period-adc_left*2;
     }
 
     if (adc_right < 100) {
       period_calc_right = period;
     }
     else {
-      period_calc_right = period-adc_right*5;
+      period_calc_right = period-adc_right*2;
     }   
+    // period_calc_right=5500;
+    // period_calc_left=5500;
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
         if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) == 0) && (period_calc_left < period) && (coil.l == 0)) {                    
@@ -293,7 +295,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_8;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -303,6 +305,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_9;
   sConfig.Rank = ADC_REGULAR_RANK_2;
+  sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
