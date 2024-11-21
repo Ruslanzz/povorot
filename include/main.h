@@ -67,8 +67,10 @@ void Error_Handler(void);
 #define PWM_B_R_GPIO_Port GPIOA
 #define PWM_B_L_Pin GPIO_PIN_3
 #define PWM_B_L_GPIO_Port GPIOA
-#define ANGLE_SENSOR_Pin GPIO_PIN_1
-#define ANGLE_SENSOR_GPIO_Port GPIOB
+#define ADC_LEFT_Pin GPIO_PIN_0
+#define ADC_LEFT_GPIO_Port GPIOB
+#define ADC_RIGHT_Pin GPIO_PIN_1
+#define ADC_RIGHT_GPIO_Port GPIOB
 #define LEFT_BRAKE_Pin GPIO_PIN_3
 #define LEFT_BRAKE_GPIO_Port GPIOB
 #define RIGHT_BRAKE_Pin GPIO_PIN_4
