@@ -148,21 +148,23 @@ int main(void)
     adc_left = (ADS_RES_BUFFER[0]);
     adc_right = (ADS_RES_BUFFER[1]);
     
-    if (adc_left < 100) {
+    if (adc_left < 10) {
       period_calc_left = period;
     }
     else {
       period_calc_left = period-adc_left*2;
+      //period_calc_left = 3000;
     }
 
-    if (adc_right < 100) {
+    if (adc_right < 10) {
       period_calc_right = period;
     }
     else {
       period_calc_right = period-adc_right*2;
-    }   
-    // period_calc_right=5500;
-    // period_calc_left=5500;
+      //period_calc_right = 3000;
+    }
+
+    //period_calc_right = 4000;
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
         if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) == 0) && (period_calc_left < period) && (coil.l == 0)) {                    
@@ -173,17 +175,17 @@ int main(void)
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
         }       
         if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) > 0) && (coil.l == 0)) {
-          if (period_calc_left == period){                  
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);
-          coil.l = 2;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
+          if (period_calc_left == period){ 
+            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);                   
+            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);          
+            coil.l = 2;          
+            __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+            HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
           }
           if (period_calc_left < period){
-            //if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2) != control.l) && (coil.l == 0)){
+            if (coil.l == 0){
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period_calc_left);        
-            //}
+          }
           }        
         }
       }
@@ -197,17 +199,17 @@ int main(void)
         HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
       }       
       if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) > 0) && (coil.r == 0)) {
-        if (period_calc_right == period){                  
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period);
-        coil.r = 2;          
-        __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
-        HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
+        if (period_calc_right == period){
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period);                    
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);        
+          coil.r = 2;          
+          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
         }
         if (period_calc_right < period){
-          //if((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_4) != control.r) && (coil.r == 0)){
+          if (coil.r == 0){
         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period_calc_right);        
-         // }
+         }
         }        
       }
     }
