@@ -49,8 +49,6 @@ CAN_HandleTypeDef hcan;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 
-UART_HandleTypeDef huart3;
-
 /* USER CODE BEGIN PV */
 CAN_TxHeaderTypeDef TxHeader;
 CAN_RxHeaderTypeDef RxHeader;
@@ -68,14 +66,12 @@ static void MX_ADC1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_CAN_Init(void);
-static void MX_USART3_UART_Init(void);
 
-
-/* USER CODE BEGIN PFP */
-const double period=20000;
-int period_left=20000;
-int period_right=20000;
-
+int adc_left=0;
+int adc_right=0;
+const int period=8190;
+int period_calc_left;
+int period_calc_right;
 
 struct coil_status
 {
@@ -92,29 +88,19 @@ struct control_status
 
 struct coil_status coil;
 struct control_status control =  {0,0};
+/* USER CODE BEGIN PFP */
+
 /* USER CODE END PFP */
-char trans_str[50];
+
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
-        if(HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK)
+    if(HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK)
     {
-        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-
-        if(RxHeader.StdId == 0x0111)
-        {
-          snprintf(trans_str, 128, "ID %04lX %d\n", RxHeader.StdId, RxData[0]);
-          period_left = (period/100)*(100-RxData[0]);
-          HAL_UART_Transmit(&huart3, (uint8_t*)trans_str, 8, 100);
-        }
-        else if(RxHeader.StdId == 0x0222)
-        {
-          period_right = (period/100)*(100-RxData[0]);    
-        }
+        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);  
     }
-
 }
 /* USER CODE END 0 */
 
@@ -152,19 +138,25 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM1_Init();
   MX_CAN_Init();
-  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_ADCEx_Calibration_Start(&hadc1);
   
-
+  TxHeader.StdId = 0x0378;
   TxHeader.ExtId = 0;
   TxHeader.RTR = CAN_RTR_DATA; //CAN_RTR_REMOTE
   TxHeader.IDE = CAN_ID_STD;   // CAN_ID_EXT
   TxHeader.DLC = 8;
   TxHeader.TransmitGlobalTime = 0;
 
+  for(uint8_t i = 0; i < 8; i++)
+  {
+      TxData[i] = (i + 10);
+  }
   HAL_CAN_Start(&hcan);
-  HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_ERROR | CAN_IT_BUSOFF | CAN_IT_LAST_ERROR_CODE); 
+  HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_ERROR | CAN_IT_BUSOFF | CAN_IT_LAST_ERROR_CODE);
+  
+
+ 
   /* USER CODE END 2 */
   
  
@@ -178,35 +170,37 @@ int main(void)
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);  
   while (1)
   {
-    // TxHeader.StdId = 0x0111;
-    // TxData[0] = 90;
-
-    // while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0);
-
+    while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0);
     // if(HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK)
     // {
-    //         HAL_UART_Transmit(&huart3, (uint8_t*)"ER SEND\n", 8, 100);
-    // }
+    //         HAL_UART_Transmit(&huart1, (uint8_t*)"ER SEND\n", 8, 100);
+    // }        
+    // HAL_Delay(500)
+     /* USER CODE END WHILE */
+    //HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 2);
+    adc_left = (ADS_RES_BUFFER[0]);
+    adc_right = (ADS_RES_BUFFER[1]);
+    
+    if (adc_left < 10) {
+      period_calc_left = period;
+    }
+    else {
+      period_calc_left = period-adc_left*2;
+      //period_calc_left = 3000;
+    }
 
-   
+    if (adc_right < 10) {
+      period_calc_right = period;
+    }
+    else {
+      period_calc_right = period-adc_right*2;
+      //period_calc_right = 3000;
+    }
 
-
-    // TxHeader.StdId = 0x0222;
-    // TxData[0] = 100;
-
-    // while(HAL_CAN_GetTxMailboxesFreeLevel(&hcan) == 0);
-
-    // if(HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK)
-    // {
-    //         HAL_UART_Transmit(&huart3, (uint8_t*)"ER SEND\n", 8, 100);
-    // }
-
-    // HAL_Delay(500);
-
-    //  /* USER CODE END WHILE */
+    //period_calc_right = 4000;
 
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) == 0) && (period_left < period) && (coil.l == 0)) {                    
+        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) == 0) && (period_calc_left < period) && (coil.l == 0)) {                    
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, period);
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
           coil.l = 1;          
@@ -214,23 +208,23 @@ int main(void)
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
         }       
         if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) > 0) && (coil.l == 0)) {
-          if (period_left == period){ 
+          if (period_calc_left == period){ 
             __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);                   
             __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);          
             coil.l = 2;          
             __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
             HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
           }
-          if (period_left < period){
+          if (period_calc_left < period){
             if (coil.l == 0){
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period_left);        
+          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period_calc_left);        
           }
           }        
         }
       }
   
   if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_2) == HAL_TIM_CHANNEL_STATE_READY) {
-      if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) == 0) && (period_right < period) && (coil.r == 0)) {                    
+      if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) == 0) && (period_calc_right < period) && (coil.r == 0)) {                    
         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, period);
         __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
         coil.r = 1;          
@@ -238,16 +232,16 @@ int main(void)
         HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
       }       
       if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) > 0) && (coil.r == 0)) {
-        if (period_right == period){
+        if (period_calc_right == period){
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period);                    
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);        
           coil.r = 2;          
           __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
           HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
         }
-        if (period_right < period){
+        if (period_calc_right < period){
           if (coil.r == 0){
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period_right);        
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period_calc_right);        
          }
         }        
       }
@@ -376,7 +370,7 @@ static void MX_CAN_Init(void)
   /* USER CODE END CAN_Init 1 */
   hcan.Instance = CAN1;
   hcan.Init.Prescaler = 4;
-  hcan.Init.Mode = CAN_MODE_NORMAL;
+  hcan.Init.Mode = CAN_MODE_SILENT_LOOPBACK;
   hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
   hcan.Init.TimeSeg1 = CAN_BS1_13TQ;
   hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
@@ -569,39 +563,6 @@ static void MX_TIM2_Init(void)
 }
 
 /**
-  * @brief USART3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART3_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART3_Init 0 */
-
-  /* USER CODE END USART3_Init 0 */
-
-  /* USER CODE BEGIN USART3_Init 1 */
-
-  /* USER CODE END USART3_Init 1 */
-  huart3.Instance = USART3;
-  huart3.Init.BaudRate = 115200;
-  huart3.Init.WordLength = UART_WORDLENGTH_8B;
-  huart3.Init.StopBits = UART_STOPBITS_1;
-  huart3.Init.Parity = UART_PARITY_NONE;
-  huart3.Init.Mode = UART_MODE_TX_RX;
-  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART3_Init 2 */
-
-  /* USER CODE END USART3_Init 2 */
-
-}
-
-/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -647,7 +608,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM1){
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1){
       if (coil.l == 1){                 
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period_left);
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period_calc_left);
       coil.l = 0;
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_1);      
       } 
@@ -658,7 +619,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     }
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2){
       if (coil.r == 1){                 
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period_right);
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period_calc_right);
       coil.r = 0;
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);      
       } 
