@@ -71,6 +71,8 @@ void Error_Handler(void);
 #define ADC_LEFT_GPIO_Port GPIOB
 #define ADC_RIGHT_Pin GPIO_PIN_1
 #define ADC_RIGHT_GPIO_Port GPIOB
+#define CAN_S_Pin GPIO_PIN_10
+#define CAN_S_GPIO_Port GPIOA
 #define LEFT_BRAKE_Pin GPIO_PIN_3
 #define LEFT_BRAKE_GPIO_Port GPIOB
 #define RIGHT_BRAKE_Pin GPIO_PIN_4
