@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <stdbool.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -40,16 +41,14 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-uint32_t ADS_RES_BUFFER[2];
+uint32_t ADS_RES_BUFFER[8];
 ADC_HandleTypeDef hadc1;
 DMA_HandleTypeDef hdma_adc1;
 
 CAN_HandleTypeDef hcan;
 
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2;
-
-UART_HandleTypeDef huart3;
+TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
 CAN_TxHeaderTypeDef TxHeader;
@@ -57,6 +56,7 @@ CAN_RxHeaderTypeDef RxHeader;
 uint8_t TxData[8];
 uint8_t RxData[8];
 uint32_t TxMailbox = 0;
+bool master = false;
 
 /* USER CODE END PV */
 
@@ -65,17 +65,25 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_CAN_Init(void);
-static void MX_USART3_UART_Init(void);
-
-
+static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
-const double period=20000;
-int period_left=20000;
-int period_right=20000;
-
+const int center_angle=1370;
+const int left_angle=200;
+const int right_angle=2740;
+int angle_diff;
+int adc_b0=0;
+int adc_b1=0;
+int period_brake=80;
+int period_drive=70;
+int period_bort=90;
+int period_calc;
+int period_left;
+int period_right;
+int period = 20000;
+GPIO_PinState left_brake;
+GPIO_PinState right_brake;
 
 struct coil_status
 {
@@ -85,13 +93,15 @@ struct coil_status
 
 struct control_status
 {
-   int r;
-   int l;  
+   int f_r;
+   int f_l;
+   int b_r;
+   int b_l;   
 };
 
 
 struct coil_status coil;
-struct control_status control =  {0,0};
+struct control_status control = {0,0,0,0};
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -99,12 +109,17 @@ struct control_status control =  {0,0};
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
-        HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData);   
-        period_left = (period/100)*(100-RxData[0]);  
-        period_right = (period/100)*(100-RxData[1]);    
-    
+        HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData); 
+        if (master == true) { 
+        }
+        else {
+          period_left = (period/100)*(100-RxData[2]);  
+          period_right = (period/100)*(100-RxData[3]);
+        }
 
 }
+
+
 /* USER CODE END 0 */
 
 /**
@@ -138,17 +153,15 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_ADC1_Init();
-  MX_TIM2_Init();
   MX_TIM1_Init();
   MX_CAN_Init();
-  MX_USART3_UART_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
   HAL_ADCEx_Calibration_Start(&hadc1);
 
-  HAL_GPIO_WritePin(GPIOA, CAN_S_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, CAN_STB_Pin, GPIO_PIN_RESET);
 
-  TxHeader.StdId = 0x123;
-  //TxHeader.ExtId = 0x0111;
+  TxHeader.StdId = 0x111; 
   TxHeader.RTR = CAN_RTR_DATA; //CAN_RTR_REMOTE
   TxHeader.IDE = CAN_ID_STD;   // CAN_ID_EXT
   TxHeader.DLC = 8;
@@ -161,67 +174,143 @@ int main(void)
  
 
   /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  MX_TIM1_Init();
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1); 
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+  /* USER CODE BEGIN WHILE */ 
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1); 
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
+  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period);
+  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period);
+  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 0);
+  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);
+  HAL_GPIO_WritePin(GPIOA, DRV1_EN_A_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOA, DRV1_EN_B_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, DRV2_EN_A_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, DRV2_EN_B_Pin, GPIO_PIN_SET);
+  period_left = period;
+  period_right = period;
 
   while (1)
-  {     
+  { 
+       //  /* USER CODE END WHILE */
 
+      if (master == true) {
+          left_brake = HAL_GPIO_ReadPin (GPIOB, COMP_ADC_1_Pin); 
+          right_brake = HAL_GPIO_ReadPin (GPIOB, COMP_ADC_2_Pin);
+          HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
+          adc_b0 = (ADS_RES_BUFFER[0]); 
 
+          if ((left_brake == GPIO_PIN_RESET) && (right_brake == GPIO_PIN_RESET))
+          {
+              control.f_l = period_brake;
+              control.f_r = period_brake;
+              control.b_l = period_brake;        
+              control.b_r = period_brake;
+          } 
+          else 
+          {  
+                if ((left_brake == GPIO_PIN_SET) && (right_brake == GPIO_PIN_SET))
+                {
+                    angle_diff = adc_b0 - center_angle;
+                    if(angle_diff > 0){
+                      period_calc = (period_drive/(right_angle-center_angle))*((right_angle-center_angle)-angle_diff);
+                      control.f_l = period_drive;
+                      control.b_l = period_drive;
+                      control.f_r = period_calc;
+                      control.b_r = period_calc;
+                    }
+                    if(angle_diff < 0) {
+                      period_calc = (period_drive/(left_angle-center_angle))*((left_angle-center_angle)-angle_diff);
+                      control.f_l = period_calc;
+                      control.b_l = period_calc;
+                      control.f_r = period_drive;
+                      control.b_r = period_drive;
+                    }                 
+                }
+                else 
+                {
+                    if ((right_brake == GPIO_PIN_SET) && (left_brake == GPIO_PIN_RESET))// R
+                    {   
+                        control.f_l = period_bort;
+                        control.f_r = 0;
+                        control.b_l = period_bort;
+                        control.b_r = 0;  
+                    }
+                    if ((left_brake == GPIO_PIN_SET) && (right_brake == GPIO_PIN_RESET))// L
+                    {   
+                        control.f_l = 0;
+                        control.f_r = period_bort;
+                        control.b_l = 0;
+                        control.b_r = period_bort;         
+                    }
+                }
+          } 
 
-    //  /* USER CODE END WHILE */
+          TxData[0]=control.f_l;
+          TxData[1]=control.f_r;
+          TxData[2]=control.b_l;
+          TxData[3]=control.b_r;
+          TxData[4]=adc_b0;
+          TxHeader.StdId = 0x222;
 
-  if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) == 0) && (period_left < period) && (coil.l == 0)) {                    
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, period);
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
-          coil.l = 1;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
-        }       
-        if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1) > 0) && (coil.l == 0)) {
-          if (period_left == period){ 
-            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period);                   
-            __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);          
-            coil.l = 2;          
-            __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
-            HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
+          if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
+            if(HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK)
+            {            
+            }
+            __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+            HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
           }
-          if (period_left < period){
-            if (coil.l == 0){
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period_left);        
+          period_left = (period/100)*(100-control.f_l);  
+          period_right = (period/100)*(100-control.f_r); 
+      }
+
+      if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
+            if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) == 0) && (period_left < period) && (coil.l == 0)) {                    
+              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, period);
+              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
+              coil.l = 1;          
+              __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+              HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
+            }       
+            if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) > 0) && (coil.l == 0)) {
+              if (period_left == period){ 
+                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period);                   
+                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 0);          
+                coil.l = 2;          
+                __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+                HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
+              }
+              if (period_left < period){
+                if (coil.l == 0){
+              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period_left);        
+              }
+              }        
+            }
           }
-          }        
+      
+      if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_2) == HAL_TIM_CHANNEL_STATE_READY) {
+          if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) == 0) && (period_right < period) && (coil.r == 0)) {                    
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, period);
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
+            coil.r = 1;          
+            __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+            HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
+          }       
+          if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) > 0) && (coil.r == 0)) {
+            if (period_right == period){
+              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period);                    
+              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);        
+              coil.r = 2;          
+              __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+              HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
+            }
+            if (period_right < period){
+              if (coil.r == 0){
+            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period_right);        
+            }
+            }        
+          }
         }
-      }
-  
-  if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_2) == HAL_TIM_CHANNEL_STATE_READY) {
-      if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) == 0) && (period_right < period) && (coil.r == 0)) {                    
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, period);
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);
-        coil.r = 1;          
-        __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-        HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
-      }       
-      if ((HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_3) > 0) && (coil.r == 0)) {
-        if (period_right == period){
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period);                    
-          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0);        
-          coil.r = 2;          
-          __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
-          HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
-        }
-        if (period_right < period){
-          if (coil.r == 0){
-        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period_right);        
-         }
-        }        
-      }
-    }
   }
   /* USER CODE END 3 */
 }
@@ -298,7 +387,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 2;
+  hadc1.Init.NbrOfConversion = 8;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -306,7 +395,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_8;
+  sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
@@ -316,9 +405,62 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_9;
+  sConfig.Channel = ADC_CHANNEL_2;
   sConfig.Rank = ADC_REGULAR_RANK_2;
-  sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_3;
+  sConfig.Rank = ADC_REGULAR_RANK_3;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_4;
+  sConfig.Rank = ADC_REGULAR_RANK_4;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_5;
+  sConfig.Rank = ADC_REGULAR_RANK_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_6;
+  sConfig.Rank = ADC_REGULAR_RANK_6;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_7;
+  sConfig.Rank = ADC_REGULAR_RANK_7;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_8;
+  sConfig.Rank = ADC_REGULAR_RANK_8;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -364,8 +506,8 @@ static void MX_CAN_Init(void)
   sFilterConfig.FilterBank = 0;
   sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
   sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT; 
-  sFilterConfig.FilterIdHigh = 0x0000;
-  sFilterConfig.FilterIdLow = 0x0000;
+  sFilterConfig.FilterIdHigh = 0x111;
+  sFilterConfig.FilterIdLow = 0x222;
   sFilterConfig.FilterMaskIdHigh = 0x0000;
   sFilterConfig.FilterMaskIdLow = 0x0000;
   sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
@@ -468,46 +610,36 @@ static void MX_TIM1_Init(void)
 }
 
 /**
-  * @brief TIM2 Initialization Function
+  * @brief TIM4 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM2_Init(void)
+static void MX_TIM4_Init(void)
 {
 
-  /* USER CODE BEGIN TIM2_Init 0 */
+  /* USER CODE BEGIN TIM4_Init 0 */
 
-  /* USER CODE END TIM2_Init 0 */
+  /* USER CODE END TIM4_Init 0 */
 
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM2_Init 1 */
+  /* USER CODE BEGIN TIM4_Init 1 */
 
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 8-1;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = period-1;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  /* USER CODE END TIM4_Init 1 */
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 72-1;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 20000-1;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
   {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
@@ -515,59 +647,26 @@ static void MX_TIM2_Init(void)
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM2_Init 2 */
+  /* USER CODE BEGIN TIM4_Init 2 */
 
-  /* USER CODE END TIM2_Init 2 */
-  HAL_TIM_MspPostInit(&htim2);
-
-}
-
-/**
-  * @brief USART3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART3_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART3_Init 0 */
-
-  /* USER CODE END USART3_Init 0 */
-
-  /* USER CODE BEGIN USART3_Init 1 */
-
-  /* USER CODE END USART3_Init 1 */
-  huart3.Instance = USART3;
-  huart3.Init.BaudRate = 115200;
-  huart3.Init.WordLength = UART_WORDLENGTH_8B;
-  huart3.Init.StopBits = UART_STOPBITS_1;
-  huart3.Init.Parity = UART_PARITY_NONE;
-  huart3.Init.Mode = UART_MODE_TX_RX;
-  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART3_Init 2 */
-
-  /* USER CODE END USART3_Init 2 */
+  /* USER CODE END TIM4_Init 2 */
+  HAL_TIM_MspPostInit(&htim4);
 
 }
 
@@ -599,25 +698,64 @@ static void MX_GPIO_Init(void)
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(CAN_S_GPIO_Port, CAN_S_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DRV2_EN_B_Pin|EN_RELAY_1_Pin|EN_RELAY_2_Pin|EN_RELAY_3_Pin
+                          |EN_RELAY_4_Pin|EN_RELAY_5_Pin|DRV2_EN_A_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : CAN_S_Pin */
-  GPIO_InitStruct.Pin = CAN_S_Pin;
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, DRV1_EN_B_Pin|DRV1_EN_A_Pin|CAN_STB_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : COMP_ADC_5_Pin COMP_ADC_6_Pin COMP_ADC_7_Pin */
+  GPIO_InitStruct.Pin = COMP_ADC_5_Pin|COMP_ADC_6_Pin|COMP_ADC_7_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : COMP_ADC_8_Pin */
+  GPIO_InitStruct.Pin = COMP_ADC_8_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(COMP_ADC_8_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : COMP_ADC_1_Pin COMP_ADC_2_Pin COMP_ADC_3_Pin */
+  GPIO_InitStruct.Pin = COMP_ADC_1_Pin|COMP_ADC_2_Pin|COMP_ADC_3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : DRV2_EN_B_Pin EN_RELAY_1_Pin EN_RELAY_2_Pin EN_RELAY_3_Pin
+                           EN_RELAY_4_Pin EN_RELAY_5_Pin DRV2_EN_A_Pin */
+  GPIO_InitStruct.Pin = DRV2_EN_B_Pin|EN_RELAY_1_Pin|EN_RELAY_2_Pin|EN_RELAY_3_Pin
+                          |EN_RELAY_4_Pin|EN_RELAY_5_Pin|DRV2_EN_A_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : DRV1_EN_B_Pin DRV1_EN_A_Pin */
+  GPIO_InitStruct.Pin = DRV1_EN_B_Pin|DRV1_EN_A_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : CAN_STB_Pin */
+  GPIO_InitStruct.Pin = CAN_STB_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(CAN_S_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(CAN_STB_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LEFT_BRAKE_Pin RIGHT_BRAKE_Pin ENABLE_FRONT_Pin ENABLE_BACK_Pin */
-  GPIO_InitStruct.Pin = LEFT_BRAKE_Pin|RIGHT_BRAKE_Pin|ENABLE_FRONT_Pin|ENABLE_BACK_Pin;
+  /*Configure GPIO pin : COMP_ADC_4_Pin */
+  GPIO_InitStruct.Pin = COMP_ADC_4_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(COMP_ADC_4_GPIO_Port, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
@@ -628,7 +766,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM1){
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1){
       if (coil.l == 1){                 
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, period_left);
+      __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period_left);
       coil.l = 0;
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_1);      
       } 
@@ -639,7 +777,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     }
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2){
       if (coil.r == 1){                 
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, period_right);
+      __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period_right);
       coil.r = 0;
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);      
       } 
@@ -648,6 +786,9 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);
       }       
     }
+    if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){      
+      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);
+      }       
     } 
 }
 /* USER CODE END 4 */
