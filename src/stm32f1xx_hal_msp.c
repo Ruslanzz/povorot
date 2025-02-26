@@ -114,7 +114,7 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
     PA7     ------> ADC1_IN7
     PB0     ------> ADC1_IN8
     */
-    GPIO_InitStruct.Pin = EXT_ADC_1_Pin|EXT_ADC_2_Pin|EXT_ADC_4_Pin|EXT_ADC_4A4_Pin
+    GPIO_InitStruct.Pin = EXT_ADC_1_Pin|EXT_ADC_2_Pin|EXT_ADC_3_Pin|EXT_ADC_4_Pin
                           |DRV1_CURRENT_Pin|DRV2_CURRENT_Pin|TEMP_SENS_1_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
@@ -174,7 +174,7 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* hadc)
     PA7     ------> ADC1_IN7
     PB0     ------> ADC1_IN8
     */
-    HAL_GPIO_DeInit(GPIOA, EXT_ADC_1_Pin|EXT_ADC_2_Pin|EXT_ADC_4_Pin|EXT_ADC_4A4_Pin
+    HAL_GPIO_DeInit(GPIOA, EXT_ADC_1_Pin|EXT_ADC_2_Pin|EXT_ADC_3_Pin|EXT_ADC_4_Pin
                           |DRV1_CURRENT_Pin|DRV2_CURRENT_Pin|TEMP_SENS_1_Pin);
 
     HAL_GPIO_DeInit(TEMP_SENS_2_GPIO_Port, TEMP_SENS_2_Pin);

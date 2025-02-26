@@ -41,7 +41,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-uint32_t ADS_RES_BUFFER[8];
+
 ADC_HandleTypeDef hadc1;
 DMA_HandleTypeDef hdma_adc1;
 
@@ -56,6 +56,7 @@ CAN_RxHeaderTypeDef RxHeader;
 uint8_t TxData[8];
 uint8_t RxData[8];
 uint32_t TxMailbox = 0;
+uint32_t ADS_RES_BUFFER[8];
 bool master = false;
 
 /* USER CODE END PV */
@@ -74,7 +75,6 @@ const int left_angle=200;
 const int right_angle=2740;
 int angle_diff;
 int adc_b0=0;
-int adc_b1=0;
 int period_brake=80;
 int period_drive=70;
 int period_bort=90;
@@ -90,6 +90,7 @@ struct coil_status
    int r;
    int l;  
 };
+struct coil_status coil;
 
 struct control_status
 {
@@ -98,14 +99,64 @@ struct control_status
    int b_r;
    int b_l;   
 };
-
-
-struct coil_status coil;
 struct control_status control = {0,0,0,0};
+
+typedef struct {
+    GPIO_TypeDef* port;  // Указатель на порт GPIO
+    uint16_t pin;        // Номер пина
+} GPIO_Config;
+
+GPIO_Config comp[] = {
+{ GPIOB, COMP_ADC_1_Pin },
+{ GPIOB, COMP_ADC_2_Pin },
+{ GPIOB, COMP_ADC_3_Pin },
+{ GPIOB, COMP_ADC_4_Pin },
+{ GPIOC, COMP_ADC_5_Pin },
+{ GPIOC, COMP_ADC_6_Pin },
+{ GPIOC, COMP_ADC_7_Pin },
+{ GPIOA, COMP_ADC_8_Pin }
+};
+
+GPIO_Config ext_adc[] = {
+{ GPIOA, EXT_ADC_1_Pin },
+{ GPIOA, EXT_ADC_2_Pin },
+{ GPIOA, EXT_ADC_3_Pin },
+{ GPIOA, EXT_ADC_4_Pin }
+};
+
+GPIO_Config relay[] = {
+{ GPIOB, EN_RELAY_1_Pin },
+{ GPIOB, EN_RELAY_2_Pin },
+{ GPIOB, EN_RELAY_3_Pin },
+{ GPIOB, EN_RELAY_4_Pin },
+{ GPIOB, EN_RELAY_5_Pin }
+};
+
 /* USER CODE END PFP */
+// Функция для чтения состояния пина с использованием структуры
+int Read_GPIO_Pin(GPIO_Config config) {
+  return (HAL_GPIO_ReadPin(config.port, config.pin) == GPIO_PIN_SET) ? 1 : 0;
+}
+
+int Set_GPIO_Pin(GPIO_Config config) {
+  HAL_GPIO_WritePin(config.port, config.pin, GPIO_PIN_SET);
+}
+
+int Reset_GPIO_Pin(GPIO_Config config) {
+HAL_GPIO_WritePin(config.port, config.pin, GPIO_PIN_RESET);
+}
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+uint32_t CalculatePeriod(uint8_t DataValue)
+{
+    // Вычисляем процентное значение
+    uint32_t percentage = 100 - DataValue;
+    // Вычисляем period_left
+    int period_calc = (period/100) * percentage;
+
+    return period_calc;
+}
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
@@ -113,12 +164,50 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         if (master == true) { 
         }
         else {
-          period_left = (period/100)*(100-RxData[2]);  
-          period_right = (period/100)*(100-RxData[3]);
+          if (RxHeader.StdId == 0x500) {
+            period_left = CalculatePeriod(RxData[2]);  
+            period_right = CalculatePeriod(RxData[3]);
+          }
+          if (RxHeader.StdId == 0x400) {
+            if (RxHeader.DLC >= 4) {              
+              for (uint8_t i = 0; i < 4; i++)
+              {
+                  if (RxData[i] == 1) {
+                    Set_GPIO_Pin(relay[i]);
+                  }
+                  else {
+                    Reset_GPIO_Pin(relay[i]);
+                  }
+              }
+            }
+          }
         }
-
 }
 
+void CAN_SendMessage(uint32_t StdId, uint8_t* data, uint8_t dataLength) {
+    // Заголовок CAN-сообщения
+    TxHeader.StdId = StdId;       // Идентификатор сообщения (передаётся как параметр)
+    TxHeader.ExtId = 0x00;        // Расширенный идентификатор (не используется)
+    TxHeader.IDE = CAN_ID_STD;    // Стандартный идентификатор
+    TxHeader.RTR = CAN_RTR_DATA;  // Тип сообщения (данные)
+    TxHeader.DLC = dataLength;    // Длина данных (передаётся как параметр)
+
+    // Копирование данных в TxData
+    for (uint8_t i = 0; i < dataLength; i++) {
+        TxData[i] = data[i];  // Копируем данные из переданного массива
+    }
+
+    // Очистка оставшихся байтов (если dataLength < 8)
+    for (uint8_t i = dataLength; i < 8; i++) {
+        TxData[i] = 0x00;
+    }
+
+    // Отправка сообщения
+    if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK) {
+        // Обработка ошибки отправки
+        Error_Handler();
+    }
+}
 
 /* USER CODE END 0 */
 
@@ -161,12 +250,6 @@ int main(void)
 
   HAL_GPIO_WritePin(GPIOA, CAN_STB_Pin, GPIO_PIN_RESET);
 
-  TxHeader.StdId = 0x111; 
-  TxHeader.RTR = CAN_RTR_DATA; //CAN_RTR_REMOTE
-  TxHeader.IDE = CAN_ID_STD;   // CAN_ID_EXT
-  TxHeader.DLC = 8;
-  TxHeader.TransmitGlobalTime = DISABLE;
-
   HAL_CAN_Start(&hcan);
   HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING); 
   /* USER CODE END 2 */
@@ -186,21 +269,66 @@ int main(void)
   HAL_GPIO_WritePin(GPIOA, DRV1_EN_A_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(GPIOA, DRV1_EN_B_Pin, GPIO_PIN_SET);
   HAL_GPIO_WritePin(GPIOB, DRV2_EN_A_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(GPIOB, DRV2_EN_B_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, DRV2_EN_B_Pin, GPIO_PIN_SET);  
   period_left = period;
-  period_right = period;
+  period_right = period;  
 
   while (1)
   { 
        //  /* USER CODE END WHILE */
+      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
+      adc_b0 = (ADS_RES_BUFFER[0]);      
+
+      if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
+            uint8_t data_comp[8];            
+            for (uint8_t i = 0; i < 8; i++) {
+                data_comp[i] = Read_GPIO_Pin(comp[i]);  // Остальные байты заполняем нулями
+            }
+            CAN_SendMessage(0x100, data_comp, 8);
+
+            uint8_t data_adc1[8];
+            uint8_t j = 0;
+            for (uint8_t i = 0; i < 4; i++) {                
+                data_adc1[j] = (uint8_t)(ADS_RES_BUFFER[i] & 0xFF);       // Младший байт числа 2500
+                j += 1;
+                data_adc1[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт числа 2500
+                j += 1;
+            }
+            CAN_SendMessage(0x200, data_adc1, 8);
+
+            uint8_t data_adc2[8];
+            j = 0;
+            for (uint8_t i = 4; i < 8; i++) {                
+                data_adc2[j] = (uint8_t)(ADS_RES_BUFFER[i] & 0xFF);       // Младший байт числа 2500
+                j += 1;
+                data_adc2[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт числа 2500
+                j += 1;
+            }
+            CAN_SendMessage(0x201, data_adc2, 8);
+
+            uint8_t data_relay[4]; 
+            for (uint8_t i = 0; i < 5; i++) {
+                data_relay[i] = Read_GPIO_Pin(relay[i]);  // Остальные байты заполняем нулями
+            }
+            CAN_SendMessage(0x300, data_relay, 4);
+
+            uint8_t data_control[4]; 
+            data_control[0] = control.f_r;  // TxData[0]
+            data_control[1] = control.f_l;  // TxData[1]
+            data_control[2] = control.b_r;  // TxData[2]
+            data_control[3] = control.b_l;  // TxData[3]
+            CAN_SendMessage(0x500, data_control, 4);
+
+            __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+            HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
+          }     
 
       if (master == true) {
-          left_brake = HAL_GPIO_ReadPin (GPIOB, COMP_ADC_1_Pin); 
-          right_brake = HAL_GPIO_ReadPin (GPIOB, COMP_ADC_2_Pin);
-          HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
-          adc_b0 = (ADS_RES_BUFFER[0]); 
+          left_brake = Read_GPIO_Pin(comp[0]); 
+          right_brake = Read_GPIO_Pin(comp[1]);
+          
 
-          if ((left_brake == GPIO_PIN_RESET) && (right_brake == GPIO_PIN_RESET))
+          if ((left_brake == 0) && (right_brake == 0))
           {
               control.f_l = period_brake;
               control.f_r = period_brake;
@@ -209,7 +337,7 @@ int main(void)
           } 
           else 
           {  
-                if ((left_brake == GPIO_PIN_SET) && (right_brake == GPIO_PIN_SET))
+                if ((left_brake == 1) && (right_brake == 1))
                 {
                     angle_diff = adc_b0 - center_angle;
                     if(angle_diff > 0){
@@ -229,14 +357,14 @@ int main(void)
                 }
                 else 
                 {
-                    if ((right_brake == GPIO_PIN_SET) && (left_brake == GPIO_PIN_RESET))// R
+                    if ((right_brake == 1) && (left_brake == 0))// R
                     {   
                         control.f_l = period_bort;
                         control.f_r = 0;
                         control.b_l = period_bort;
                         control.b_r = 0;  
                     }
-                    if ((left_brake == GPIO_PIN_SET) && (right_brake == GPIO_PIN_RESET))// L
+                    if ((left_brake == 1) && (right_brake == 0))// L
                     {   
                         control.f_l = 0;
                         control.f_r = period_bort;
@@ -245,24 +373,10 @@ int main(void)
                     }
                 }
           } 
-
-          TxData[0]=control.f_l;
-          TxData[1]=control.f_r;
-          TxData[2]=control.b_l;
-          TxData[3]=control.b_r;
-          TxData[4]=adc_b0;
-          TxHeader.StdId = 0x222;
-
-          if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
-            if(HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK)
-            {            
-            }
-            __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
-            HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
-          }
-          period_left = (period/100)*(100-control.f_l);  
-          period_right = (period/100)*(100-control.f_r); 
+          period_left = CalculatePeriod(control.f_l);
+          period_right = CalculatePeriod(control.f_r);
       }
+     
 
       if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
             if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) == 0) && (period_left < period) && (coil.l == 0)) {                    
@@ -506,8 +620,8 @@ static void MX_CAN_Init(void)
   sFilterConfig.FilterBank = 0;
   sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
   sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT; 
-  sFilterConfig.FilterIdHigh = 0x111;
-  sFilterConfig.FilterIdLow = 0x222;
+  sFilterConfig.FilterIdHigh = 0x000;
+  sFilterConfig.FilterIdLow = 0;
   sFilterConfig.FilterMaskIdHigh = 0x0000;
   sFilterConfig.FilterMaskIdLow = 0x0000;
   sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;

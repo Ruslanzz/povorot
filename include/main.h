@@ -71,10 +71,10 @@ void Error_Handler(void);
 #define EXT_ADC_1_GPIO_Port GPIOA
 #define EXT_ADC_2_Pin GPIO_PIN_2
 #define EXT_ADC_2_GPIO_Port GPIOA
-#define EXT_ADC_4_Pin GPIO_PIN_3
+#define EXT_ADC_3_Pin GPIO_PIN_3
+#define EXT_ADC_3_GPIO_Port GPIOA
+#define EXT_ADC_4_Pin GPIO_PIN_4
 #define EXT_ADC_4_GPIO_Port GPIOA
-#define EXT_ADC_4A4_Pin GPIO_PIN_4
-#define EXT_ADC_4A4_GPIO_Port GPIOA
 #define DRV1_CURRENT_Pin GPIO_PIN_5
 #define DRV1_CURRENT_GPIO_Port GPIOA
 #define DRV2_CURRENT_Pin GPIO_PIN_6
