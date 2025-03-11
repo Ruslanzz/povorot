@@ -57,7 +57,7 @@ uint8_t TxData[8];
 uint8_t RxData[8];
 uint32_t TxMailbox = 0;
 uint32_t ADS_RES_BUFFER[8];
-bool master = false;
+
 
 /* USER CODE END PV */
 
@@ -117,13 +117,6 @@ GPIO_Config comp[] = {
 { GPIOA, COMP_ADC_8_Pin }
 };
 
-GPIO_Config ext_adc[] = {
-{ GPIOA, EXT_ADC_1_Pin },
-{ GPIOA, EXT_ADC_2_Pin },
-{ GPIOA, EXT_ADC_3_Pin },
-{ GPIOA, EXT_ADC_4_Pin }
-};
-
 GPIO_Config relay[] = {
 { GPIOB, EN_RELAY_1_Pin },
 { GPIOB, EN_RELAY_2_Pin },
@@ -131,6 +124,18 @@ GPIO_Config relay[] = {
 { GPIOB, EN_RELAY_4_Pin },
 { GPIOB, EN_RELAY_5_Pin }
 };
+
+bool master = true;
+uint8_t device_id = 0x01;
+
+uint8_t out_comp_adc_stdid = 0x01;
+uint8_t out_adc1_stdid = 0x02;
+uint8_t out_adc2_stdid = 0x03;
+uint8_t out_relay_stdid = 0x04;
+uint8_t out_control_stdid = 0x05;
+
+uint8_t in_control_stdid = 0x06;
+uint8_t in_relay_stdid = 0x07;
 
 /* USER CODE END PFP */
 // Функция для чтения состояния пина с использованием структуры
@@ -164,12 +169,11 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         if (master == true) { 
         }
         else {
-          if (RxHeader.StdId == 0x500) {
+          if (RxHeader.StdId == (device_id << 6) | in_control_stdid) {
             period_left = CalculatePeriod(RxData[2]);  
             period_right = CalculatePeriod(RxData[3]);
           }
-          if (RxHeader.StdId == 0x400) {
-            if (RxHeader.DLC >= 4) {              
+          if (RxHeader.StdId == (device_id << 6) | in_relay_stdid) {
               for (uint8_t i = 0; i < 4; i++)
               {
                   if (RxData[i] == 1) {
@@ -182,7 +186,6 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
             }
           }
         }
-}
 
 void CAN_SendMessage(uint32_t StdId, uint8_t* data, uint8_t dataLength) {
     // Заголовок CAN-сообщения
@@ -252,8 +255,7 @@ int main(void)
 
   HAL_CAN_Start(&hcan);
   HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING); 
-  /* USER CODE END 2 */
-  
+  /* USER CODE END 2 */ 
  
 
   /* Infinite loop */
@@ -282,42 +284,42 @@ int main(void)
       if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
             uint8_t data_comp[8];            
             for (uint8_t i = 0; i < 8; i++) {
-                data_comp[i] = Read_GPIO_Pin(comp[i]);  // Остальные байты заполняем нулями
+                data_comp[i] = Read_GPIO_Pin(comp[i]);
             }
-            CAN_SendMessage(0x100, data_comp, 8);
+            CAN_SendMessage((device_id << 6) | out_comp_adc_stdid, data_comp, 8);
 
             uint8_t data_adc1[8];
             uint8_t j = 0;
             for (uint8_t i = 0; i < 4; i++) {                
-                data_adc1[j] = (uint8_t)(ADS_RES_BUFFER[i] & 0xFF);       // Младший байт числа 2500
+                data_adc1[j] = (uint8_t)(ADS_RES_BUFFER[i] & 0xFF);       // Младший байт
                 j += 1;
-                data_adc1[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт числа 2500
+                data_adc1[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт
                 j += 1;
             }
-            CAN_SendMessage(0x200, data_adc1, 8);
+            CAN_SendMessage((device_id << 6) | out_adc1_stdid, data_adc1, 8);
 
             uint8_t data_adc2[8];
             j = 0;
             for (uint8_t i = 4; i < 8; i++) {                
-                data_adc2[j] = (uint8_t)(ADS_RES_BUFFER[i] & 0xFF);       // Младший байт числа 2500
+                data_adc2[j] = (uint8_t)(ADS_RES_BUFFER[i] & 0xFF);       // Младший байт
                 j += 1;
-                data_adc2[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт числа 2500
+                data_adc2[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт 
                 j += 1;
             }
-            CAN_SendMessage(0x201, data_adc2, 8);
+            CAN_SendMessage((device_id << 6) | out_adc2_stdid, data_adc2, 8);
 
             uint8_t data_relay[4]; 
             for (uint8_t i = 0; i < 5; i++) {
-                data_relay[i] = Read_GPIO_Pin(relay[i]);  // Остальные байты заполняем нулями
+                data_relay[i] = Read_GPIO_Pin(relay[i]);
             }
-            CAN_SendMessage(0x300, data_relay, 4);
+            CAN_SendMessage((device_id << 6) | out_relay_stdid, data_relay, 4);
 
             uint8_t data_control[4]; 
             data_control[0] = control.f_r;  // TxData[0]
             data_control[1] = control.f_l;  // TxData[1]
             data_control[2] = control.b_r;  // TxData[2]
             data_control[3] = control.b_l;  // TxData[3]
-            CAN_SendMessage(0x500, data_control, 4);
+            CAN_SendMessage((device_id << 6) | out_control_stdid, data_control, 4);
 
             __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
             HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
