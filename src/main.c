@@ -41,21 +41,27 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+#define BASE_RELAY        0x00
+#define BASE_ADC1         0x10
+#define BASE_ADC2         0x20
+#define BASE_CONTROL      0x30
+#define BASE_COMP         0x40
+#define BASE_RELAY_OUT    0x50
+
+#define RELAY_COUNT       5
+#define ADC1_COUNT        2
+#define ADC2_COUNT        2
+#define CONTROL_COUNT     1
+#define COMP_COUNT        1
+#define RELAY_OUT_COUNT   1
 
 ADC_HandleTypeDef hadc1;
 DMA_HandleTypeDef hdma_adc1;
-
 CAN_HandleTypeDef hcan;
-
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
-CAN_TxHeaderTypeDef TxHeader;
-CAN_RxHeaderTypeDef RxHeader;
-uint8_t TxData[8];
-uint8_t RxData[8];
-uint32_t TxMailbox = 0;
 uint32_t ADS_RES_BUFFER[8];
 
 
@@ -128,27 +134,30 @@ GPIO_Config relay[] = {
 bool master = true;
 uint8_t device_id = 0x01;
 
-uint8_t out_comp_adc_stdid = 0x01;
-uint8_t out_adc1_stdid = 0x02;
-uint8_t out_adc2_stdid = 0x03;
-uint8_t out_relay_stdid = 0x04;
-uint8_t out_control_stdid = 0x05;
-
-uint8_t in_control_stdid = 0x06;
-uint8_t in_relay_stdid = 0x07;
-
 /* USER CODE END PFP */
 // Функция для чтения состояния пина с использованием структуры
 int Read_GPIO_Pin(GPIO_Config config) {
   return (HAL_GPIO_ReadPin(config.port, config.pin) == GPIO_PIN_SET) ? 1 : 0;
 }
 
-int Set_GPIO_Pin(GPIO_Config config) {
-  HAL_GPIO_WritePin(config.port, config.pin, GPIO_PIN_SET);
+
+// Функция для включения реле по индексу
+void turn_on_relay(uint8_t relay_index) {
+  if (relay_index < RELAY_COUNT) {
+      HAL_GPIO_WritePin(relay[relay_index].port, relay[relay_index].pin, GPIO_PIN_SET);
+  }
 }
 
-int Reset_GPIO_Pin(GPIO_Config config) {
-HAL_GPIO_WritePin(config.port, config.pin, GPIO_PIN_RESET);
+// Функция для выключения реле по индексу
+void turn_off_relay(uint8_t relay_index) {
+  if (relay_index < RELAY_COUNT) {
+      HAL_GPIO_WritePin(relay[relay_index].port, relay[relay_index].pin, GPIO_PIN_RESET);
+  }
+}
+
+// Генерация stdid
+uint32_t generate_stdid(uint8_t device_id, uint8_t base_index, uint8_t parameter_index) {
+  return ((uint32_t)device_id << 8) | (uint32_t)(base_index + parameter_index);
 }
 
 /* Private user code ---------------------------------------------------------*/
@@ -164,30 +173,41 @@ uint32_t CalculatePeriod(uint8_t DataValue)
 }
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
-{
-        HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData); 
-        if (master == true) { 
+{        
+  CAN_RxHeaderTypeDef RxHeader;
+  uint8_t RxData[8]; // Буфер для данных CAN-сообщения
+
+  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK) {
+    uint32_t stdid = RxHeader.StdId;
+    // Извлекаем device_id и parameter_index из stdid
+    uint8_t std_device_id = (stdid >> 8) & 0xFF; // Старшие 8 бит
+    uint8_t parameter_index = stdid & 0xFF;   // Младшие 8 бит
+    
+    if (std_device_id == device_id) {
+      if (parameter_index >= BASE_RELAY && parameter_index < BASE_RELAY + RELAY_COUNT) {
+        // Обработка реле
+        uint8_t relay_index = parameter_index - BASE_RELAY;
+        if (RxData[0] == 1) {          
+          turn_on_relay(relay_index);
         }
         else {
-          if (RxHeader.StdId == (device_id << 6) | in_control_stdid) {
-            period_left = CalculatePeriod(RxData[2]);  
-            period_right = CalculatePeriod(RxData[3]);
-          }
-          if (RxHeader.StdId == (device_id << 6) | in_relay_stdid) {
-              for (uint8_t i = 0; i < 4; i++)
-              {
-                  if (RxData[i] == 1) {
-                    Set_GPIO_Pin(relay[i]);
-                  }
-                  else {
-                    Reset_GPIO_Pin(relay[i]);
-                  }
-              }
-            }
-          }
-        }
+          turn_off_relay(relay_index);  
+        }         
+      }
+      if (master == false) {         
+        if (parameter_index >= BASE_CONTROL && parameter_index < BASE_CONTROL + CONTROL_COUNT) {
+          period_left = CalculatePeriod(RxData[2]);  
+          period_right = CalculatePeriod(RxData[3]);
+        }      
+      }
+    }
+  }
+}
 
 void CAN_SendMessage(uint32_t StdId, uint8_t* data, uint8_t dataLength) {
+    CAN_TxHeaderTypeDef TxHeader;
+    uint8_t TxData[8];
+    uint32_t TxMailbox = 0;
     // Заголовок CAN-сообщения
     TxHeader.StdId = StdId;       // Идентификатор сообщения (передаётся как параметр)
     TxHeader.ExtId = 0x00;        // Расширенный идентификатор (не используется)
@@ -282,11 +302,14 @@ int main(void)
       adc_b0 = (ADS_RES_BUFFER[0]);      
 
       if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
-            uint8_t data_comp[8];            
+            uint8_t data_comp[8];
+            uint32_t stdid;            
             for (uint8_t i = 0; i < 8; i++) {
                 data_comp[i] = Read_GPIO_Pin(comp[i]);
-            }
-            CAN_SendMessage((device_id << 6) | out_comp_adc_stdid, data_comp, 8);
+            }            
+            stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
+            CAN_SendMessage(stdid, data_comp, 8);
+
 
             uint8_t data_adc1[8];
             uint8_t j = 0;
@@ -296,7 +319,8 @@ int main(void)
                 data_adc1[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт
                 j += 1;
             }
-            CAN_SendMessage((device_id << 6) | out_adc1_stdid, data_adc1, 8);
+            stdid = generate_stdid(device_id, BASE_ADC1, ADC1_COUNT);
+            CAN_SendMessage(stdid, data_adc1, 8);
 
             uint8_t data_adc2[8];
             j = 0;
@@ -306,20 +330,25 @@ int main(void)
                 data_adc2[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт 
                 j += 1;
             }
-            CAN_SendMessage((device_id << 6) | out_adc2_stdid, data_adc2, 8);
+            stdid = generate_stdid(device_id, BASE_ADC2, ADC2_COUNT);
+            CAN_SendMessage((device_id << 6) | stdid, data_adc2, 8);
 
-            uint8_t data_relay[4]; 
+            uint8_t data_relay[5]; 
             for (uint8_t i = 0; i < 5; i++) {
                 data_relay[i] = Read_GPIO_Pin(relay[i]);
             }
-            CAN_SendMessage((device_id << 6) | out_relay_stdid, data_relay, 4);
+            stdid = generate_stdid(device_id, BASE_RELAY_OUT, RELAY_OUT_COUNT);
+            CAN_SendMessage((device_id << 6) | stdid, data_relay, 4);
 
+            if (master == true) {
             uint8_t data_control[4]; 
             data_control[0] = control.f_r;  // TxData[0]
             data_control[1] = control.f_l;  // TxData[1]
             data_control[2] = control.b_r;  // TxData[2]
             data_control[3] = control.b_l;  // TxData[3]
-            CAN_SendMessage((device_id << 6) | out_control_stdid, data_control, 4);
+            uint32_t stdid = generate_stdid(device_id, BASE_CONTROL, CONTROL_COUNT);
+            CAN_SendMessage(stdid, data_control, 4);
+            }
 
             __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
             HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
