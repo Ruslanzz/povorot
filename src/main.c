@@ -91,6 +91,7 @@ int period_bort=90;
 int period_calc;
 int period_left;
 int period_right;
+int selector_n;
 int period = 20000;
 GPIO_PinState left_brake;
 GPIO_PinState right_brake;
@@ -135,13 +136,13 @@ GPIO_Config relay[] = {
 { GPIOB, EN_RELAY_5_Pin }
 };
 
-bool master = false;
-uint8_t device_id = 0x02;
+bool master = true;
+uint8_t device_id = 0x01;
 
 /* USER CODE END PFP */
 // Функция для чтения состояния пина с использованием структуры
 int Read_GPIO_Pin(GPIO_Config config) {
-  return (HAL_GPIO_ReadPin(config.port, config.pin) == GPIO_PIN_SET) ? 0 : 1;
+  return (HAL_GPIO_ReadPin(config.port, config.pin) == GPIO_PIN_SET) ? 1 : 0;
 }
 
 
@@ -308,11 +309,11 @@ int main(void)
       if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
             uint8_t data_comp[8];
             uint32_t stdid;            
-            // for (uint8_t i = 0; i < 8; i++) {
-            //     data_comp[i] = Read_GPIO_Pin(comp[i]);
-            // }            
-            // stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
-            // CAN_SendMessage(stdid, data_comp, 8);
+            for (uint8_t i = 0; i < 8; i++) {
+                data_comp[i] = Read_GPIO_Pin(comp[i]);
+            }            
+            stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
+            CAN_SendMessage(stdid, data_comp, 8);
 
 
             // uint8_t data_adc1[8];
@@ -359,11 +360,13 @@ int main(void)
           }     
 
       if (master == true) {
+        selector_n = Read_GPIO_Pin(comp[2]) + Read_GPIO_Pin(comp[3]);
+        if (selector_n == 1) {
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);
-          
+                    
 
-          if ((left_brake == 0) && (right_brake == 0))
+          if ((left_brake == 1) && (right_brake == 1))
           {
               control.f_l = period_brake;
               control.f_r = period_brake;
@@ -372,7 +375,7 @@ int main(void)
           } 
           else 
           {  
-                if ((left_brake == 1) && (right_brake == 1))
+                if ((left_brake == 0) && (right_brake == 0))
                 {
                     angle_diff = adc_b0 - center_angle;
                     if(angle_diff > 0){
@@ -392,14 +395,14 @@ int main(void)
                 }
                 else 
                 {
-                    if ((right_brake == 1) && (left_brake == 0))// R
+                    if ((right_brake == 0) && (left_brake == 1))// R
                     {   
                         control.f_l = period_bort;
                         control.f_r = 0;
                         control.b_l = period_bort;
                         control.b_r = 0;  
                     }
-                    if ((left_brake == 1) && (right_brake == 0))// L
+                    if ((left_brake == 0) && (right_brake == 1))// L
                     {   
                         control.f_l = 0;
                         control.f_r = period_bort;
@@ -408,8 +411,15 @@ int main(void)
                     }
                 }
           } 
+        }
+        else {
+          control.f_l = 0;
+          control.f_r = 0;
+          control.b_l = 0;
+          control.b_r = 0; 
+        }
           period_left = CalculatePeriod(control.f_l);
-          period_right = CalculatePeriod(control.f_r);
+          period_right = CalculatePeriod(control.f_r);        
       }
      
 
