@@ -200,11 +200,17 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         } 
       }        
     }
+    if (master == false){
     if (std_device_id == 1 ) {         
       if (parameter_index == BASE_CONTROL + 1) {
         period_left = CalculatePeriod(RxData[2]);  
-        period_right = CalculatePeriod(RxData[3]);
-      }      
+        period_right = CalculatePeriod(RxData[3]);                          
+        // HAL_GPIO_WritePin(GPIOB, EN_RELAY_1_Pin, (RxData[0] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        // HAL_GPIO_WritePin(GPIOB, EN_RELAY_2_Pin, (RxData[1] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        // HAL_GPIO_WritePin(GPIOB, EN_RELAY_3_Pin, (RxData[2] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        // HAL_GPIO_WritePin(GPIOB, EN_RELAY_4_Pin, (RxData[3] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);         
+        }
+      }            
     }
   }
 }
@@ -363,60 +369,33 @@ int main(void)
         selector_n = Read_GPIO_Pin(comp[2]) + Read_GPIO_Pin(comp[3]);
         if (selector_n == 1) {
           left_brake = Read_GPIO_Pin(comp[0]); 
-          right_brake = Read_GPIO_Pin(comp[1]);
-                    
+          right_brake = Read_GPIO_Pin(comp[1]);                    
 
-          if ((left_brake == 1) && (right_brake == 1))
-          {
-              control.f_l = period_brake;
-              control.f_r = period_brake;
-              control.b_l = period_brake;        
-              control.b_r = period_brake;
-          } 
-          else 
-          {  
-                if ((left_brake == 0) && (right_brake == 0))
-                {
-                    angle_diff = adc_b0 - center_angle;
-                    if(angle_diff > 0){
-                      period_calc = (period_drive/(right_angle-center_angle))*((right_angle-center_angle)-angle_diff);
-                      control.f_l = period_drive;
-                      control.b_l = period_drive;
-                      control.f_r = period_calc;
-                      control.b_r = period_calc;
-                    }
-                    if(angle_diff < 0) {
-                      period_calc = (period_drive/(left_angle-center_angle))*((left_angle-center_angle)-angle_diff);
-                      control.f_l = period_calc;
-                      control.b_l = period_calc;
-                      control.f_r = period_drive;
-                      control.b_r = period_drive;
-                    }                 
-                }
-                else 
-                {
-                    if ((right_brake == 0) && (left_brake == 1))// R
-                    {   
-                        control.f_l = period_bort;
-                        control.f_r = 0;
-                        control.b_l = period_bort;
-                        control.b_r = 0;  
-                    }
-                    if ((left_brake == 0) && (right_brake == 1))// L
-                    {   
-                        control.f_l = 0;
-                        control.f_r = period_bort;
-                        control.b_l = 0;
-                        control.b_r = period_bort;         
-                    }
-                }
-          } 
-        }
-        else {
-          control.f_l = 0;
-          control.f_r = 0;
-          control.b_l = 0;
-          control.b_r = 0; 
+          if (!left_brake && right_brake) {
+            control = (struct control_status){period_brake};
+          } else if (!left_brake && !right_brake) {
+              angle_diff = adc_b0 - center_angle;
+              if(angle_diff > 0) {
+                period_calc = (period_drive/(right_angle-center_angle))*((right_angle-center_angle)-angle_diff);
+                control.f_l = control.b_l = period_drive;                   
+                control.f_r = control.b_r = period_calc;                     
+              } else if (angle_diff < 0) {
+                period_calc = (period_drive/(left_angle-center_angle))*((left_angle-center_angle)-angle_diff);
+                control.f_l = control.b_l = period_calc;                     
+                control.f_r = control.b_r = period_drive;                      
+              }                 
+          } else {
+              if (!right_brake && left_brake) {   
+                  control.f_l = control.b_l = period_bort;
+                  control.f_r = control.b_r = 0;                  
+              } else if (!left_brake && right_brake) {   
+                  control.f_l = control.b_l = 0;
+                  control.f_r = control.b_r = period_bort;                                
+              }
+          }
+          
+        } else {
+          control = (struct control_status){0};
         }
           period_left = CalculatePeriod(control.f_l);
           period_right = CalculatePeriod(control.f_r);        
