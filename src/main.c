@@ -80,15 +80,15 @@ static void MX_TIM1_Init(void);
 static void MX_CAN_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
-const int center_angle=1370;
-const int left_angle=200;
-const int right_angle=2740;
+const int center_angle=638; //638
+const int left_angle=186; //1163
+const int right_angle=1163; //186
 int angle_diff;
 int adc_b0=0;
 int period_brake=50;
 int period_drive=60;
 int period_bort=80;
-int period_calc;
+float period_calc;
 int period_left;
 int period_right;
 int selector_n;
@@ -136,8 +136,8 @@ GPIO_Config relay[] = {
 { GPIOB, EN_RELAY_5_Pin }
 };
 
-bool master = true;
-uint8_t device_id = 0x01;
+bool master = false;
+uint8_t device_id = 0x02;
 
 /* USER CODE END PFP */
 // Функция для чтения состояния пина с использованием структуры
@@ -188,18 +188,18 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     uint8_t std_device_id = (stdid >> 8) & 0xFF; // Старшие 8 бит
     uint8_t parameter_index = stdid & 0xFF;   // Младшие 8 бит
     
-    if (std_device_id == device_id) {
-      if (parameter_index >= BASE_RELAY && parameter_index < BASE_RELAY + RELAY_COUNT) {
-        // Обработка реле
-        uint8_t relay_index = parameter_index - BASE_RELAY;
-        if (RxData[0] == 1) {          
-          turn_on_relay(relay_index);
-        }
-        else {
-          turn_off_relay(relay_index);  
-        } 
-      }        
-    }
+    // if (std_device_id == device_id) {
+    //   if (parameter_index >= BASE_RELAY && parameter_index < BASE_RELAY + RELAY_COUNT) {
+    //     // Обработка реле
+    //     uint8_t relay_index = parameter_index - BASE_RELAY;
+    //     if (RxData[0] == 1) {          
+    //       turn_on_relay(relay_index);
+    //     }
+    //     else {
+    //       turn_off_relay(relay_index);  
+    //     } 
+    //   }        
+    // }
     if (master == false){
     if (std_device_id == 1 ) {         
       if (parameter_index == BASE_CONTROL + 1) {
@@ -210,7 +210,14 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         // HAL_GPIO_WritePin(GPIOB, EN_RELAY_3_Pin, (RxData[2] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
         // HAL_GPIO_WritePin(GPIOB, EN_RELAY_4_Pin, (RxData[3] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);         
         }
-      }            
+      
+      if (parameter_index == BASE_COMP + 1) {
+        HAL_GPIO_WritePin(GPIOB, EN_RELAY_1_Pin, (RxData[0] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);//левый поворот
+        HAL_GPIO_WritePin(GPIOB, EN_RELAY_2_Pin, (RxData[1] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);//правый поворот
+        HAL_GPIO_WritePin(GPIOB, EN_RELAY_3_Pin, (RxData[3] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET); //задний ход
+
+      } 
+    }               
     }
   }
 }
@@ -371,20 +378,22 @@ int main(void)
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);                    
 
-          if (!left_brake && right_brake) {
-            control = (struct control_status){period_brake};
-          } else if (!left_brake && !right_brake) {
+          if (left_brake && right_brake) {
+            control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
+          } 
+          else if (!left_brake && !right_brake) {
               angle_diff = adc_b0 - center_angle;
               if(angle_diff > 0) {
-                period_calc = (period_drive/(right_angle-center_angle))*((right_angle-center_angle)-angle_diff);
+                period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
                 control.f_l = control.b_l = period_drive;                   
                 control.f_r = control.b_r = period_calc;                     
               } else if (angle_diff < 0) {
-                period_calc = (period_drive/(left_angle-center_angle))*((left_angle-center_angle)-angle_diff);
+               period_calc = ((float)period_drive/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
+                              //(60/1163-638)*(1163-638+164)
                 control.f_l = control.b_l = period_calc;                     
                 control.f_r = control.b_r = period_drive;                      
               }                 
-          } else {
+          } 
               if (!right_brake && left_brake) {   
                   control.f_l = control.b_l = period_bort;
                   control.f_r = control.b_r = 0;                  
@@ -392,9 +401,9 @@ int main(void)
                   control.f_l = control.b_l = 0;
                   control.f_r = control.b_r = period_bort;                                
               }
-          }
           
-        } else {
+          
+            } else {
           control = (struct control_status){0};
         }
           period_left = CalculatePeriod(control.f_l);
