@@ -139,8 +139,8 @@ GPIO_Config relay[] = {
 { GPIOB, EN_RELAY_5_Pin }
 };
 
-bool master = false;
-uint8_t device_id = 0x02;
+bool master = true;
+uint8_t device_id = 0x01;
 
 /* USER CODE END PFP */
 // Функция для чтения состояния пина с использованием структуры
@@ -182,6 +182,7 @@ void StartButtonMeasurement()
 // Обработчик EXTI (считаем нажатия)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+  
   if (master == true) {
     if (GPIO_Pin == COMP_ADC_3_Pin)
     {
@@ -259,7 +260,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         HAL_GPIO_WritePin(GPIOB, EN_RELAY_3_Pin, (RxData[3] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET); //задний ход
 
       } 
-    }               
+    }              
     }
   }
 }
@@ -917,10 +918,20 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(COMP_ADC_8_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : COMP_ADC_1_Pin COMP_ADC_2_Pin COMP_ADC_3_Pin */
-  GPIO_InitStruct.Pin = COMP_ADC_1_Pin|COMP_ADC_2_Pin|COMP_ADC_3_Pin;
+  GPIO_InitStruct.Pin = COMP_ADC_1_Pin|COMP_ADC_2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+
+  GPIO_InitStruct.Pin = COMP_ADC_3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;  // Убрали лишнюю точку с запятой
+  GPIO_InitStruct.Pull = GPIO_NOPULL;           // Добавили подтяжку к VCC
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  /*Configure GPIO pins : COMP_ADC_1_Pin COMP_ADC_2_Pin COMP_ADC_3_Pin */
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);  // EXTIx - номер прерывания для вашего пина
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+  
 
   /*Configure GPIO pins : DRV2_EN_B_Pin EN_RELAY_1_Pin EN_RELAY_2_Pin EN_RELAY_3_Pin
                            EN_RELAY_4_Pin EN_RELAY_5_Pin DRV2_EN_A_Pin */

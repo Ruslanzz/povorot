@@ -285,5 +285,7 @@ void TIM1_UP_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
-
+void EXTI3_IRQHandler(void) {
+  HAL_GPIO_EXTI_IRQHandler(COMP_ADC_3_Pin);  // GPIO_PIN_X - ваш пин
+}
 /* USER CODE END 1 */
