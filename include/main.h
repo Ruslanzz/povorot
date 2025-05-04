@@ -107,8 +107,10 @@ void Error_Handler(void);
 #define CAN_STB_GPIO_Port GPIOA
 #define COMP_ADC_3_Pin GPIO_PIN_3
 #define COMP_ADC_3_GPIO_Port GPIOB
+#define COMP_ADC_3_EXTI_IRQn EXTI3_IRQn
 #define COMP_ADC_4_Pin GPIO_PIN_4
 #define COMP_ADC_4_GPIO_Port GPIOB
+#define COMP_ADC_4_EXTI_IRQn EXTI4_IRQn
 #define DRV2_EN_A_Pin GPIO_PIN_5
 #define DRV2_EN_A_GPIO_Port GPIOB
 #define DRV1_IN_A_Pin GPIO_PIN_6
