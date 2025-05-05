@@ -98,6 +98,11 @@ int period_right;
 int period = 20000;
 GPIO_PinState left_brake;
 GPIO_PinState right_brake;
+volatile uint32_t tim1_ch1_pulse = 2500 - 1;
+volatile uint32_t tim1_ch2_pulse = 2500 - 1;
+volatile uint32_t tim1_ch3_pulse = 5000 - 1;
+volatile uint32_t tim1_ch4_pulse = 20000 - 1;
+
 
 typedef enum {
   BTN_IDLE,
@@ -108,7 +113,6 @@ typedef enum {
 static ButtonState btn_state = BTN_IDLE;
 static uint32_t btn_timestamp = 0;
 // Глобальные переменные для антидребезга
-static uint32_t last_interrupt_time = 0;
 const uint32_t DEBOUNCE_DELAY_MS = 50; // Оптимальное время для большинства кнопок
 
 struct coil_status
@@ -189,6 +193,7 @@ void StartButtonMeasurement()
     buttonPressCount = 1;
     measurementActive = 1;
     Selector = 'D';
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, tim1_ch4_pulse);
     HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4); // Запускаем таймер
 }
 
@@ -213,7 +218,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
                       firstPressDetected = 1;
                       StartButtonMeasurement();
                   }
-                  else if (measurementActive) {
+                  else if (measurementActive) {                       
+                      __HAL_TIM_SET_COMPARE(&htim1, HAL_TIM_ACTIVE_CHANNEL_4, tim1_ch4_pulse);
                       buttonPressCount++;
                   }
                   btn_state = BTN_DEBOUNCE;
@@ -322,6 +328,33 @@ void CAN_SendMessage(uint32_t StdId, uint8_t* data, uint8_t dataLength) {
     }
 }
 
+void CreateCANMessages() {
+  uint8_t data_comp[8];
+  uint32_t stdid;            
+  for (uint8_t i = 0; i < 8; i++) {
+      data_comp[i] = Read_GPIO_Pin(comp[i]);
+  }            
+  stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
+  CAN_SendMessage(stdid, data_comp, 8);
+
+  if (master == true) {
+      // Отправка данных селектора АКПП
+      uint8_t data_akpp[1] = {Selector};
+      uint32_t stdid = generate_stdid(device_id, BASE_AKPP, AKPP_COUNT);      
+      CAN_SendMessage(stdid, data_akpp, 1);  
+
+      // Отправка контрольных данных
+      uint8_t data_control[4] = {
+          control.f_r,  // TxData[0]
+          control.f_l,  // TxData[1]
+          control.b_r,  // TxData[2]
+          control.b_l   // TxData[3]
+      };
+      stdid = generate_stdid(device_id, BASE_CONTROL, CONTROL_COUNT);
+      CAN_SendMessage(stdid, data_control, 4);
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -394,14 +427,14 @@ int main(void)
       HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
       adc_b0 = (ADS_RES_BUFFER[0]);      
 
-      if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
-            uint8_t data_comp[8];
-            uint32_t stdid;            
-            for (uint8_t i = 0; i < 8; i++) {
-                data_comp[i] = Read_GPIO_Pin(comp[i]);
-            }            
-            stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
-            CAN_SendMessage(stdid, data_comp, 8);                
+      // if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
+      //       uint8_t data_comp[8];
+      //       uint32_t stdid;            
+      //       for (uint8_t i = 0; i < 8; i++) {
+      //           data_comp[i] = Read_GPIO_Pin(comp[i]);
+      //       }            
+      //       stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
+      //       CAN_SendMessage(stdid, data_comp, 8);                
 
 
             // uint8_t data_adc1[8];
@@ -433,26 +466,26 @@ int main(void)
             // stdid = generate_stdid(device_id, BASE_RELAY_OUT, RELAY_OUT_COUNT);
             // CAN_SendMessage(stdid, data_relay, 4);
 
-            if (master == true) {
-              uint8_t data_akpp[1];
-              data_akpp[0] = Selector;
-              stdid = generate_stdid(device_id, BASE_AKPP, AKPP_COUNT);      
-              CAN_SendMessage(stdid, data_akpp, 1);  
+          //   if (master == true) {
+          //     uint8_t data_akpp[1];
+          //     data_akpp[0] = Selector;
+          //     stdid = generate_stdid(device_id, BASE_AKPP, AKPP_COUNT);      
+          //     CAN_SendMessage(stdid, data_akpp, 1);  
 
-              uint8_t data_control[4]; 
-              data_control[0] = control.f_r;  // TxData[0]
-              data_control[1] = control.f_l;  // TxData[1]
-              data_control[2] = control.b_r;  // TxData[2]
-              data_control[3] = control.b_l;  // TxData[3]
-              stdid = generate_stdid(device_id, BASE_CONTROL, CONTROL_COUNT);
-              CAN_SendMessage(stdid, data_control, 4);
-            }
+          //     uint8_t data_control[4]; 
+          //     data_control[0] = control.f_r;  // TxData[0]
+          //     data_control[1] = control.f_l;  // TxData[1]
+          //     data_control[2] = control.b_r;  // TxData[2]
+          //     data_control[3] = control.b_l;  // TxData[3]
+          //     stdid = generate_stdid(device_id, BASE_CONTROL, CONTROL_COUNT);
+          //     CAN_SendMessage(stdid, data_control, 4);
+          //   }
             
-            HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
-          }     
+          //   HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
+          // }     
 
       if (master == true) { 
-        if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_4) == HAL_TIM_CHANNEL_STATE_READY) {
+        if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC4) == RESET) {
           if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
             Selector = 'N';
           } 
@@ -492,12 +525,12 @@ int main(void)
       }
      
 
-      if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_1) == HAL_TIM_CHANNEL_STATE_READY) {
+      if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC1) == RESET) {
             if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) == 0) && (period_left < period) && (coil.l == 0)) {                    
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, period);
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
               coil.l = 1;          
-              //__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, tim1_ch1_pulse);
               HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
             }       
             if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) > 0) && (coil.l == 0)) {
@@ -505,7 +538,7 @@ int main(void)
                 __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period);                   
                 __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 0);          
                 coil.l = 2;          
-                //__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+                __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, tim1_ch1_pulse); 
                 HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
               }
               if (period_left < period){
@@ -516,12 +549,12 @@ int main(void)
             }
           }
       
-      if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_2) == HAL_TIM_CHANNEL_STATE_READY) {
+      if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC2) == RESET) {
           if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) == 0) && (period_right < period) && (coil.r == 0)) {                    
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, period);
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
             coil.r = 1;          
-            //__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, tim1_ch2_pulse); 
             HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
           }       
           if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) > 0) && (coil.r == 0)) {
@@ -529,7 +562,7 @@ int main(void)
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period);                    
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);        
               coil.r = 2;          
-              //__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, tim1_ch2_pulse);  
               HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
             }
             if (period_right < period){
@@ -803,22 +836,22 @@ static void MX_TIM1_Init(void)
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
   sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  sConfigOC.Pulse = 5000;
+  sConfigOC.Pulse = tim1_ch1_pulse;
   if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.Pulse = 5000;
+  sConfigOC.Pulse = tim1_ch2_pulse;
   if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.Pulse = 1000;
+  sConfigOC.Pulse = tim1_ch3_pulse;
   if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.Pulse = 30000;
+  sConfigOC.Pulse = tim1_ch4_pulse;
   if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
@@ -1028,15 +1061,17 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
       if (coil.r == 2){
       coil.r = 0;   
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);
-      }       
+      }            
     }
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){      
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);
+      CreateCANMessages();
+      uint32_t next_pulse = __HAL_TIM_GET_COMPARE(htim, HAL_TIM_ACTIVE_CHANNEL_3) + tim1_ch3_pulse; // +0.5 сек
+      __HAL_TIM_SET_COMPARE(htim, HAL_TIM_ACTIVE_CHANNEL_3, next_pulse);
       }    
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4){
+      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
       measurementActive = 0; // Останавливаем подсчет
-      firstPressDetected = 0; // Сбрасываем флаг первого нажатия      
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);      
+      firstPressDetected = 0; // Сбрасываем флаг первого нажатия             
       if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
         Selector = 'N';
       }      
@@ -1047,8 +1082,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
           case 3: Selector = '2'; break; // Все случаи ≥ 3
           default: Selector = 'P'; break; // Все случаи ≥ 3
         }        
-      }
-     // buttonPressCount =0;
+      }    
     }
     }  
 }
