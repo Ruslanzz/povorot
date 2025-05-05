@@ -99,6 +99,18 @@ int period = 20000;
 GPIO_PinState left_brake;
 GPIO_PinState right_brake;
 
+typedef enum {
+  BTN_IDLE,
+  BTN_PRESSED,
+  BTN_DEBOUNCE
+} ButtonState;
+
+static ButtonState btn_state = BTN_IDLE;
+static uint32_t btn_timestamp = 0;
+// Глобальные переменные для антидребезга
+static uint32_t last_interrupt_time = 0;
+const uint32_t DEBOUNCE_DELAY_MS = 50; // Оптимальное время для большинства кнопок
+
 struct coil_status
 {
    int r;
@@ -176,7 +188,8 @@ void StartButtonMeasurement()
 {
     buttonPressCount = 1;
     measurementActive = 1;
-    HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_4); // Запускаем таймер
+    Selector = 'D';
+    HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4); // Запускаем таймер
 }
 
 // Обработчик EXTI (считаем нажатия)
@@ -186,17 +199,33 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   if (master == true) {
     if (GPIO_Pin == COMP_ADC_3_Pin)
     {
-        // Если измерение не активно, но было первое нажатие — запускаем замер
-        if (!measurementActive && !firstPressDetected)
-        {   
-            firstPressDetected = 1;
-            StartButtonMeasurement();            
-        }
-        // Если измерение активно — считаем нажатия
-        else if (measurementActive)
-        {
-            buttonPressCount++;
-        }
+      uint32_t now = HAL_GetTick();
+        
+      switch (btn_state) {
+          case BTN_IDLE:
+              btn_state = BTN_PRESSED;
+              btn_timestamp = now;
+              break;
+              
+          case BTN_PRESSED:
+              if (now - btn_timestamp >= DEBOUNCE_DELAY_MS) {
+                  if (!measurementActive && !firstPressDetected) {
+                      firstPressDetected = 1;
+                      StartButtonMeasurement();
+                  }
+                  else if (measurementActive) {
+                      buttonPressCount++;
+                  }
+                  btn_state = BTN_DEBOUNCE;
+              }
+              break;
+              
+          case BTN_DEBOUNCE:
+              if (now - btn_timestamp >= DEBOUNCE_DELAY_MS * 2) {
+                  btn_state = BTN_IDLE;
+              }
+              break;
+      }
     }
     if (GPIO_Pin == COMP_ADC_4_Pin)
     {   
@@ -355,6 +384,8 @@ int main(void)
   HAL_GPIO_WritePin(GPIOB, DRV2_EN_B_Pin, GPIO_PIN_SET);  
   period_left = period;
   period_right = period;
+  __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);
+
     
 
   while (1)
@@ -416,11 +447,16 @@ int main(void)
               stdid = generate_stdid(device_id, BASE_CONTROL, CONTROL_COUNT);
               CAN_SendMessage(stdid, data_control, 4);
             }
-            __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+            
             HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
           }     
 
-      if (master == true) {        
+      if (master == true) { 
+        if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_4) == HAL_TIM_CHANNEL_STATE_READY) {
+          if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
+            Selector = 'N';
+          } 
+        }       
         if (Selector != 'N') {
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);                    
@@ -461,7 +497,7 @@ int main(void)
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, period);
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
               coil.l = 1;          
-              __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+              //__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
               HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
             }       
             if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) > 0) && (coil.l == 0)) {
@@ -469,7 +505,7 @@ int main(void)
                 __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period);                   
                 __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 0);          
                 coil.l = 2;          
-                __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+                //__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
                 HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
               }
               if (period_left < period){
@@ -485,7 +521,7 @@ int main(void)
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, period);
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
             coil.r = 1;          
-            __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
+            //__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE); 
             HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
           }       
           if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) > 0) && (coil.r == 0)) {
@@ -493,7 +529,7 @@ int main(void)
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period);                    
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);        
               coil.r = 2;          
-              __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
+              //__HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);  
               HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
             }
             if (period_right < period){
@@ -740,7 +776,7 @@ static void MX_TIM1_Init(void)
   htim1.Init.Period = 50000-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
@@ -926,7 +962,7 @@ static void MX_GPIO_Init(void)
 
   GPIO_InitStruct.Pin = COMP_ADC_3_Pin|COMP_ADC_4_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;  // Убрали лишнюю точку с запятой
-  GPIO_InitStruct.Pull = GPIO_NOPULL;           // Добавили подтяжку к VCC
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;           // Добавили подтяжку к VCC
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
   /*Configure GPIO pins : COMP_ADC_1_Pin COMP_ADC_2_Pin COMP_ADC_3_Pin */
  
@@ -955,11 +991,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(CAN_STB_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : COMP_ADC_4_Pin */
-  GPIO_InitStruct.Pin = COMP_ADC_4_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(COMP_ADC_4_GPIO_Port, &GPIO_InitStruct);
+  // /*Configure GPIO pin : COMP_ADC_4_Pin */
+  // GPIO_InitStruct.Pin = COMP_ADC_4_Pin;
+  // GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  // GPIO_InitStruct.Pull = GPIO_PULLUP;
+  // HAL_GPIO_Init(COMP_ADC_4_GPIO_Port, &GPIO_InitStruct);
   HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
@@ -996,12 +1032,11 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     }
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){      
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_3);
-      }       
-     
+      }    
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4){
       measurementActive = 0; // Останавливаем подсчет
       firstPressDetected = 0; // Сбрасываем флаг первого нажатия      
-      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
+      HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);      
       if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
         Selector = 'N';
       }      
@@ -1011,8 +1046,9 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
           case 2:  Selector = '1'; break;
           case 3: Selector = '2'; break; // Все случаи ≥ 3
           default: Selector = 'P'; break; // Все случаи ≥ 3
-        }
+        }        
       }
+     // buttonPressCount =0;
     }
     }  
 }
