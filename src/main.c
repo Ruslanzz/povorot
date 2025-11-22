@@ -98,9 +98,9 @@ int period_right;
 int period = 20000;
 GPIO_PinState left_brake;
 GPIO_PinState right_brake;
-volatile uint32_t tim1_ch1_pulse = 2500 - 1;
-volatile uint32_t tim1_ch2_pulse = 2500 - 1;
-volatile uint32_t tim1_ch3_pulse = 5000 - 1;
+volatile uint32_t tim1_ch1_pulse = 2000 - 1;
+volatile uint32_t tim1_ch2_pulse = 2000 - 1;
+volatile uint32_t tim1_ch3_pulse = 2000 - 1;
 volatile uint32_t tim1_ch4_pulse = 20000 - 1;
 
 
@@ -113,7 +113,10 @@ typedef enum {
 static ButtonState btn_state = BTN_IDLE;
 static uint32_t btn_timestamp = 0;
 // Глобальные переменные для антидребезга
-const uint32_t DEBOUNCE_DELAY_MS = 50; // Оптимальное время для большинства кнопок
+const uint32_t DEBOUNCE_DELAY_MS = 40; // Оптимальное время для большинства кнопок
+volatile uint32_t last_button_press_time = 0;
+volatile uint8_t button_debounce_flag = 0;
+volatile uint8_t button_valid_press = 0;
 
 struct coil_status
 {
@@ -192,8 +195,23 @@ void StartButtonMeasurement()
 {
     buttonPressCount = 1;
     measurementActive = 1;
-    Selector = 'D';
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, tim1_ch4_pulse);
+    // Получение текущих значений
+    __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC4);
+    HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
+    uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_4);
+    uint32_t timer_period = htim1.Instance->ARR;
+    
+    // Расчет нового значения с защитой от переполнения
+    uint32_t new_compare = current_compare + tim1_ch4_pulse;
+    if (new_compare > timer_period) {
+        new_compare -= timer_period;
+        
+        // Дополнительная корректировка если нужно
+        new_compare = new_compare % (timer_period + 1);
+    }
+    
+    // Установка нового значения
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, new_compare);
     HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4); // Запускаем таймер
 }
 
@@ -205,37 +223,39 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     if (GPIO_Pin == COMP_ADC_3_Pin)
     {
       uint32_t now = HAL_GetTick();
-        
-      switch (btn_state) {
-          case BTN_IDLE:
-              btn_state = BTN_PRESSED;
-              btn_timestamp = now;
-              break;
-              
-          case BTN_PRESSED:
-              if (now - btn_timestamp >= DEBOUNCE_DELAY_MS) {
-                  if (!measurementActive && !firstPressDetected) {
-                      firstPressDetected = 1;
-                      StartButtonMeasurement();
-                  }
-                  else if (measurementActive) {                       
-                      __HAL_TIM_SET_COMPARE(&htim1, HAL_TIM_ACTIVE_CHANNEL_4, tim1_ch4_pulse);
-                      buttonPressCount++;
-                  }
-                  btn_state = BTN_DEBOUNCE;
-              }
-              break;
-              
-          case BTN_DEBOUNCE:
-              if (now - btn_timestamp >= DEBOUNCE_DELAY_MS * 2) {
-                  btn_state = BTN_IDLE;
-              }
-              break;
-      }
+
+       // Быстрая проверка антидребезга (50ms)
+       if (now - last_button_press_time < DEBOUNCE_DELAY_MS) {
+        button_debounce_flag = 1;  // Флаг дребезга
+        return;
     }
+    
+    // Если дошли сюда - нажатие валидное
+    last_button_press_time = now;
+    button_valid_press = 1;
+    button_debounce_flag = 0;
+    
+    // Обработка состояний
+    if (!measurementActive) {
+        if (!firstPressDetected) {
+            firstPressDetected = 1;
+            StartButtonMeasurement();
+        }
+    } else {
+        // Обработка повторных нажатий
+        uint32_t new_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_4) + tim1_ch4_pulse;
+        if (new_compare > htim1.Instance->ARR) {
+            new_compare = new_compare % (htim1.Instance->ARR + 1);
+        }
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, new_compare);
+        buttonPressCount++;
+    }
+  }
     if (GPIO_Pin == COMP_ADC_4_Pin)
     {   
-        HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
+        if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC4) == RESET) {
+          HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
+        }
         measurementActive = 0; // Останавливаем подсчет
         firstPressDetected = 0;
         buttonPressCount = 0;
@@ -417,14 +437,19 @@ int main(void)
   HAL_GPIO_WritePin(GPIOB, DRV2_EN_B_Pin, GPIO_PIN_SET);  
   period_left = period;
   period_right = period;
-  __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);
-
+  
+  // HAL_TIM_Base_Start(&htim1);
+  // __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);
+  HAL_TIM_Base_Start(&htim1);
+  HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
     
 
   while (1)
   { 
+      __WFI(); // Wait for interrupt (энергоэффективно)
        //  /* USER CODE END WHILE */
-      HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
+      // HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
       adc_b0 = (ADS_RES_BUFFER[0]);      
 
       // if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
@@ -529,16 +554,47 @@ int main(void)
             if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) == 0) && (period_left < period) && (coil.l == 0)) {                    
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, period);
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
-              coil.l = 1;          
-              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, tim1_ch1_pulse);
-              HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);          
+              coil.l = 1;  
+
+              // Получение текущих значений
+              uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_1);
+              uint32_t timer_period = htim1.Instance->ARR;
+              
+              // Расчет нового значения с защитой от переполнения
+              uint32_t new_compare = current_compare + tim1_ch1_pulse;
+              if (new_compare > timer_period) {
+                  new_compare -= timer_period;
+                  
+                  // Дополнительная корректировка если нужно
+                  new_compare = new_compare % (timer_period + 1);
+              }
+              
+              // Установка нового значения
+              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, new_compare);             
+              HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);  
+                      
             }       
             if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) > 0) && (coil.l == 0)) {
               if (period_left == period){ 
                 __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period);                   
                 __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 0);          
-                coil.l = 2;          
-                __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, tim1_ch1_pulse); 
+                coil.l = 2;
+               
+              // Получение текущих значений
+              uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_1);
+              uint32_t timer_period = htim1.Instance->ARR;
+              
+              // Расчет нового значения с защитой от переполнения
+              uint32_t new_compare = current_compare + tim1_ch1_pulse;
+              if (new_compare > timer_period) {
+                  new_compare -= timer_period;
+                  
+                  // Дополнительная корректировка если нужно
+                  new_compare = new_compare % (timer_period + 1);
+              }
+              
+              // Установка нового значения
+              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, new_compare);
                 HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
               }
               if (period_left < period){
@@ -553,16 +609,45 @@ int main(void)
           if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) == 0) && (period_right < period) && (coil.r == 0)) {                    
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, period);
             __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
-            coil.r = 1;          
-            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, tim1_ch2_pulse); 
-            HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);          
+            coil.r = 1; 
+            
+              // Получение текущих значений
+              uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_2);
+              uint32_t timer_period = htim1.Instance->ARR;
+              
+              // Расчет нового значения с защитой от переполнения
+              uint32_t new_compare = current_compare + tim1_ch2_pulse;
+              if (new_compare > timer_period) {
+                  new_compare -= timer_period;
+                  
+                  // Дополнительная корректировка если нужно
+                  new_compare = new_compare % (timer_period + 1);
+              }
+              
+              // Установка нового значения
+              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, new_compare);
+              HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2); 
           }       
           if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) > 0) && (coil.r == 0)) {
             if (period_right == period){
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period);                    
               __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);        
               coil.r = 2;          
-              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, tim1_ch2_pulse);  
+              // Получение текущих значений
+              uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_2);
+              uint32_t timer_period = htim1.Instance->ARR;
+              
+              // Расчет нового значения с защитой от переполнения
+              uint32_t new_compare = current_compare + tim1_ch2_pulse;
+              if (new_compare > timer_period) {
+                  new_compare -= timer_period;
+                  
+                  // Дополнительная корректировка если нужно
+                  new_compare = new_compare % (timer_period + 1);
+              }
+              
+              // Установка нового значения
+              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, new_compare);  
               HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
             }
             if (period_right < period){
@@ -792,7 +877,7 @@ static void MX_TIM1_Init(void)
 {
 
   /* USER CODE BEGIN TIM1_Init 0 */
-
+  __HAL_RCC_TIM1_CLK_ENABLE();
   /* USER CODE END TIM1_Init 0 */
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
@@ -806,7 +891,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 7200-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 50000-1;
+  htim1.Init.Period = 20000-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
@@ -868,7 +953,13 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
-
+  HAL_NVIC_SetPriority(TIM1_CC_IRQn, 0, 0);  // Высший приоритет
+  HAL_NVIC_EnableIRQ(TIM1_CC_IRQn);
+  __HAL_RCC_TIM1_CLK_ENABLE();
+  // __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_CC1);
+  // __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_CC2);
+  // __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_CC3);
+  // __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_CC4);
   /* USER CODE END TIM1_Init 2 */
 
 }
@@ -945,7 +1036,7 @@ static void MX_DMA_Init(void)
 
   /* DMA interrupt init */
   /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 
 }
@@ -1039,9 +1130,14 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void TIM1_CC_IRQHandler(void) {
+  HAL_TIM_IRQHandler(&htim1);
+}
+
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {  
     if (htim->Instance == TIM1){
-    if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1){
+    if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1){     
+      __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC1);
       if (coil.l == 1){                 
       __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period_left);
       coil.l = 0;
@@ -1053,6 +1149,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
       }       
     }
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2){
+      __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC2);
       if (coil.r == 1){                 
       __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period_right);
       coil.r = 0;
@@ -1063,12 +1160,28 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_2);
       }            
     }
-    if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){      
+    if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){   
+      //__HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC3);   
       CreateCANMessages();
-      uint32_t next_pulse = __HAL_TIM_GET_COMPARE(htim, HAL_TIM_ACTIVE_CHANNEL_3) + tim1_ch3_pulse; // +0.5 сек
-      __HAL_TIM_SET_COMPARE(htim, HAL_TIM_ACTIVE_CHANNEL_3, next_pulse);
-      }    
+     // Получение текущих значений
+      uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_3);
+      uint32_t timer_period = htim1.Instance->ARR;
+      
+      // Расчет нового значения с защитой от переполнения
+      uint32_t new_compare = current_compare + tim1_ch3_pulse;
+      if (new_compare > timer_period) {
+          new_compare -= timer_period;
+          
+          // Дополнительная корректировка если нужно
+          new_compare = new_compare % (timer_period + 1);
+      }
+      
+      // Установка нового значения
+      __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, new_compare);
+      }  
+     
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4){
+      __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC4);
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
       measurementActive = 0; // Останавливаем подсчет
       firstPressDetected = 0; // Сбрасываем флаг первого нажатия             
@@ -1078,8 +1191,8 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
       else if (Read_GPIO_Pin(comp[2]) == 1 && Read_GPIO_Pin(comp[3]) == 0) {
         switch(buttonPressCount) {         
           case 1:  Selector = 'D'; break;
-          case 2:  Selector = '1'; break;
-          case 3: Selector = '2'; break; // Все случаи ≥ 3
+          case 2:  Selector = '2'; break;
+          case 3: Selector = '1'; break; // Все случаи ≥ 3
           default: Selector = 'P'; break; // Все случаи ≥ 3
         }        
       }    
