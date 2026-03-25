@@ -161,6 +161,53 @@ GPIO_Config relay[] = {
 bool master = true;
 uint8_t device_id = 0x01;
 
+
+typedef enum {
+    FOLD_IDLE = 0,
+    FOLD_MOVING_LEFT,
+    FOLD_MOVING_RIGHT,
+    FOLD_RETURNING_TO_CENTER, 
+    FOLD_EMERGENCY_STOP
+} SystemState;
+
+typedef struct {
+    SystemState state;
+    uint8_t left_lever_active;
+    uint8_t right_lever_active;
+    int current_frame_angle;     // Текущий угол рамы из ADC
+    uint32_t center_return_timer; // Таймер для задержки возврата в центр
+} FoldingSystem;
+
+FoldingSystem folding_sys = {0};
+#define VESC_CAN_ID 0x01
+#define FOLDING_SPEED_RPM 100.0f      // Скорость вращения мотора
+#define CENTER_RETURN_DELAY 500       // Задержка перед возвратом в центр (мс)
+#define CENTER_TOLERANCE 15           // Допуск для центрального положения
+
+// Граничные углы для защиты от перескладывания
+#define MIN_ANGLE left_angle    // Минимальный угол (186)
+#define MAX_ANGLE right_angle   // Максимальный угол (1163)
+#define SAFETY_MARGIN 20        // Запас до границ
+
+#define ENCODER_LEFT         186
+#define ENCODER_CENTER       638
+#define ENCODER_RIGHT        1163
+
+// CAN VESC
+#define VESC_CAN_ID          0x01
+#define VESC_CMD_POSITION    4
+
+// Кинематика (оборотов мотора на 1 единицу энкодера)
+// НУЖНО ПОДОБРАТЬ ЭКСПЕРИМЕНТАЛЬНО!
+#define REVS_PER_UNIT        0.01f
+
+// Параметры движения
+#define SPEED                1.5f        // Скорость движения (оборотов/сек)
+#define CONTROL_FREQ         50          // 50 Гц
+#define CENTER_DEADZONE      10          // Мертвая зона (единицы энкодера)
+
+int current_angle; 
+float target_revs = 0;       // Целевые обороты мотора
 /* USER CODE END PFP */
 // Функция для чтения состояния пина с использованием структуры
 int Read_GPIO_Pin(GPIO_Config config) {
@@ -375,6 +422,83 @@ void CreateCANMessages() {
   }
 }
 
+
+void VESC_SetPosition(float motor_revs)
+{
+    uint32_t stdid = generate_stdid(VESC_CAN_ID, BASE_CONTROL, 2);
+    uint8_t data[8] = {0};
+    
+    // Ограничение
+    if (motor_revs < 0) motor_revs = 0;
+    float max_revs = (ENCODER_RIGHT - ENCODER_LEFT) * REVS_PER_UNIT;
+    if (motor_revs > max_revs) motor_revs = max_revs;
+    
+    // Преобразование в градусы вала и масштабирование 1e6
+    int32_t pos = (int32_t)(motor_revs * 360.0f * 1000000.0f);
+    
+    // Big Endian упаковка
+    data[0] = (pos >> 24) & 0xFF;
+    data[1] = (pos >> 16) & 0xFF;
+    data[2] = (pos >> 8) & 0xFF;
+    data[3] = pos & 0xFF;
+    
+    CAN_SendMessage(stdid, data, 4);
+}
+
+
+
+float AngleToRevs(int angle)
+{
+    if (angle <= ENCODER_LEFT) return 0;
+    if (angle >= ENCODER_RIGHT) return (ENCODER_RIGHT - ENCODER_LEFT) * REVS_PER_UNIT;
+    return (angle - ENCODER_LEFT) * REVS_PER_UNIT;
+}
+
+
+int RevsToAngle(float revs)
+{
+    int angle = ENCODER_LEFT + (int)(revs / REVS_PER_UNIT);
+    if (angle < ENCODER_LEFT) return ENCODER_LEFT;
+    if (angle > ENCODER_RIGHT) return ENCODER_RIGHT;
+    return angle;
+}
+
+uint8_t IsInCenter(void)
+{
+    int diff = current_angle - ENCODER_CENTER;
+    if (diff < 0) diff = -diff;
+    return (diff <= CENTER_DEADZONE);
+}
+
+// ==================== ВОЗВРАТ В ЦЕНТР ====================
+
+void MoveToCenter(void)
+{
+    float current_revs = AngleToRevs(current_angle);
+    float center_revs = AngleToRevs(ENCODER_CENTER);
+    
+    if (IsInCenter()) {
+        // Уже в центре - останавливаемся
+        target_revs = current_revs;
+        VESC_SetPosition(target_revs);
+        return;
+    }
+    
+    // Двигаемся к центру
+    if (current_revs > center_revs) {
+        // Нужно влево (уменьшаем обороты)
+        target_revs = current_revs - (SPEED / CONTROL_FREQ);
+        if (target_revs < center_revs) target_revs = center_revs;
+    } else {
+        // Нужно вправо (увеличиваем обороты)
+        target_revs = current_revs + (SPEED / CONTROL_FREQ);
+        if (target_revs > center_revs) target_revs = center_revs;
+    }
+    
+    VESC_SetPosition(target_revs);
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -450,66 +574,9 @@ int main(void)
       __WFI(); // Wait for interrupt (энергоэффективно)
        //  /* USER CODE END WHILE */
       // HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
-      adc_b0 = (ADS_RES_BUFFER[0]);      
-
-      // if (TIM_CHANNEL_STATE_GET(&htim1, TIM_CHANNEL_3) == HAL_TIM_CHANNEL_STATE_READY) {
-      //       uint8_t data_comp[8];
-      //       uint32_t stdid;            
-      //       for (uint8_t i = 0; i < 8; i++) {
-      //           data_comp[i] = Read_GPIO_Pin(comp[i]);
-      //       }            
-      //       stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
-      //       CAN_SendMessage(stdid, data_comp, 8);                
-
-
-            // uint8_t data_adc1[8];
-            // uint8_t j = 0;
-            // for (uint8_t i = 0; i < 4; i++) {                
-            //     data_adc1[j] = (uint8_t)(ADS_RES_BUFFER[i] & 0xFF);       // Младший байт
-            //     j += 1;
-            //     data_adc1[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт
-            //     j += 1;
-            // }
-            // stdid = generate_stdid(device_id, BASE_ADC1, ADC1_COUNT);
-            // CAN_SendMessage(stdid, data_adc1, 8);
-
-            // uint8_t data_adc2[8];
-            // j = 0;
-            // for (uint8_t i = 0; i < 4; i++) {                
-            //     data_adc2[j] = (uint8_t)(ADS_RES_BUFFER[i] & 0xFF);       // Младший байт
-            //     j += 1;
-            //     data_adc2[j] = (uint8_t)((ADS_RES_BUFFER[i] >> 8) & 0xFF); // Старший байт 
-            //     j += 1;
-            // }
-            // stdid = generate_stdid(device_id, BASE_ADC2, ADC2_COUNT);
-            // CAN_SendMessage(stdid, data_adc2, 8);
-
-            // uint8_t data_relay[5]; 
-            // for (uint8_t i = 0; i < 5; i++) {
-            //     data_relay[i] = Read_GPIO_Pin(relay[i]);
-            // }
-            // stdid = generate_stdid(device_id, BASE_RELAY_OUT, RELAY_OUT_COUNT);
-            // CAN_SendMessage(stdid, data_relay, 4);
-
-          //   if (master == true) {
-          //     uint8_t data_akpp[1];
-          //     data_akpp[0] = Selector;
-          //     stdid = generate_stdid(device_id, BASE_AKPP, AKPP_COUNT);      
-          //     CAN_SendMessage(stdid, data_akpp, 1);  
-
-          //     uint8_t data_control[4]; 
-          //     data_control[0] = control.f_r;  // TxData[0]
-          //     data_control[1] = control.f_l;  // TxData[1]
-          //     data_control[2] = control.b_r;  // TxData[2]
-          //     data_control[3] = control.b_l;  // TxData[3]
-          //     stdid = generate_stdid(device_id, BASE_CONTROL, CONTROL_COUNT);
-          //     CAN_SendMessage(stdid, data_control, 4);
-          //   }
-            
-          //   HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
-          // }     
-
-      if (master == true) { 
+      adc_b0 = (ADS_RES_BUFFER[0]);
+      current_angle = adc_b0;       
+      if (master == true) {
         if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC4) == RESET) {
           if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
             Selector = 'N';
@@ -517,10 +584,10 @@ int main(void)
         }       
         if (Selector != 'N') {
           left_brake = Read_GPIO_Pin(comp[0]); 
-          right_brake = Read_GPIO_Pin(comp[1]);                    
-
+          right_brake = Read_GPIO_Pin(comp[1]);
           if (left_brake && right_brake) {
             control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
+            MoveToCenter();
           } 
           else if (!left_brake && !right_brake) {
               angle_diff = adc_b0 - center_angle;
@@ -546,7 +613,7 @@ int main(void)
           control = (struct control_status){0};
         }
           period_left = CalculatePeriod(control.f_l);
-          period_right = CalculatePeriod(control.f_r);        
+          period_right = CalculatePeriod(control.f_r);   
       }
      
 
