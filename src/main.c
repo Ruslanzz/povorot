@@ -118,6 +118,14 @@ volatile uint32_t last_button_press_time = 0;
 volatile uint8_t button_debounce_flag = 0;
 volatile uint8_t button_valid_press = 0;
 
+// Типы команд VESC
+typedef enum {
+  CAN_PACKET_SET_POS = 4,           // Установка позиции
+  CAN_PACKET_SET_CURRENT = 1,       // Установка тока
+  CAN_PACKET_SET_RPM = 3,           // Установка оборотов
+  CAN_PACKET_SET_DUTY = 5,          // Установка заполнения
+} VESC_CMD_t;
+
 struct coil_status
 {
    int r;
@@ -179,7 +187,7 @@ typedef struct {
 } FoldingSystem;
 
 FoldingSystem folding_sys = {0};
-#define VESC_CAN_ID 0x01
+#define VESC_CAN_ID 60
 #define FOLDING_SPEED_RPM 100.0f      // Скорость вращения мотора
 #define CENTER_RETURN_DELAY 500       // Задержка перед возвратом в центр (мс)
 #define CENTER_TOLERANCE 15           // Допуск для центрального положения
@@ -422,83 +430,31 @@ void CreateCANMessages() {
   }
 }
 
-
-void VESC_SetPosition(float motor_revs)
-{
-    uint32_t stdid = generate_stdid(VESC_CAN_ID, BASE_CONTROL, 2);
-    uint8_t data[8] = {0};
-    
-    // Ограничение
-    if (motor_revs < 0) motor_revs = 0;
-    float max_revs = (ENCODER_RIGHT - ENCODER_LEFT) * REVS_PER_UNIT;
-    if (motor_revs > max_revs) motor_revs = max_revs;
-    
-    // Преобразование в градусы вала и масштабирование 1e6
-    int32_t pos = (int32_t)(motor_revs * 360.0f * 1000000.0f);
-    
-    // Big Endian упаковка
-    data[0] = (pos >> 24) & 0xFF;
-    data[1] = (pos >> 16) & 0xFF;
-    data[2] = (pos >> 8) & 0xFF;
-    data[3] = pos & 0xFF;
-    
-    CAN_SendMessage(stdid, data, 4);
+// Функция отправки RPM команды на VESC
+void vesc_set_rpm(uint8_t id_vesc, int32_t erpm) {
+  uint8_t data[4];
+  int32_t idx = 0;
+  
+  // Упаковка 32-битного числа в big-endian
+  data[0] = (erpm >> 24) & 0xFF;
+  data[1] = (erpm >> 16) & 0xFF;
+  data[2] = (erpm >> 8) & 0xFF;
+  data[3] = erpm & 0xFF;
+  
+  // Формирование CAN ID: (команда << 8) | ID контроллера
+  uint32_t can_id = (CAN_PACKET_SET_RPM << 8) | id_vesc;
+  
+  CAN_TxHeaderTypeDef tx_header;
+  uint32_t tx_mailbox;
+  
+  tx_header.ExtId = can_id;
+  tx_header.IDE = CAN_ID_EXT;      // Расширенный ID (29 бит)
+  tx_header.RTR = CAN_RTR_DATA;
+  tx_header.DLC = 4;
+  tx_header.TransmitGlobalTime = DISABLE;
+  
+  HAL_CAN_AddTxMessage(&hcan, &tx_header, data, &tx_mailbox);
 }
-
-
-
-float AngleToRevs(int angle)
-{
-    if (angle <= ENCODER_LEFT) return 0;
-    if (angle >= ENCODER_RIGHT) return (ENCODER_RIGHT - ENCODER_LEFT) * REVS_PER_UNIT;
-    return (angle - ENCODER_LEFT) * REVS_PER_UNIT;
-}
-
-
-int RevsToAngle(float revs)
-{
-    int angle = ENCODER_LEFT + (int)(revs / REVS_PER_UNIT);
-    if (angle < ENCODER_LEFT) return ENCODER_LEFT;
-    if (angle > ENCODER_RIGHT) return ENCODER_RIGHT;
-    return angle;
-}
-
-uint8_t IsInCenter(void)
-{
-    int diff = current_angle - ENCODER_CENTER;
-    if (diff < 0) diff = -diff;
-    return (diff <= CENTER_DEADZONE);
-}
-
-// ==================== ВОЗВРАТ В ЦЕНТР ====================
-
-void MoveToCenter(void)
-{
-    float current_revs = AngleToRevs(current_angle);
-    float center_revs = AngleToRevs(ENCODER_CENTER);
-    
-    if (IsInCenter()) {
-        // Уже в центре - останавливаемся
-        target_revs = current_revs;
-        VESC_SetPosition(target_revs);
-        return;
-    }
-    
-    // Двигаемся к центру
-    if (current_revs > center_revs) {
-        // Нужно влево (уменьшаем обороты)
-        target_revs = current_revs - (SPEED / CONTROL_FREQ);
-        if (target_revs < center_revs) target_revs = center_revs;
-    } else {
-        // Нужно вправо (увеличиваем обороты)
-        target_revs = current_revs + (SPEED / CONTROL_FREQ);
-        if (target_revs > center_revs) target_revs = center_revs;
-    }
-    
-    VESC_SetPosition(target_revs);
-}
-
-
 /* USER CODE END 0 */
 
 /**
@@ -506,6 +462,7 @@ void MoveToCenter(void)
   * @retval int
   */
 int main(void)
+
 {
 
   /* USER CODE BEGIN 1 */
@@ -567,7 +524,7 @@ int main(void)
   HAL_TIM_Base_Start(&htim1);
   HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
-    
+  
 
   while (1)
   { 
@@ -582,14 +539,15 @@ int main(void)
             Selector = 'N';
           } 
         }       
-        if (Selector != 'N') {
+        
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);
           if (left_brake && right_brake) {
             control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
-            MoveToCenter();
+            vesc_set_rpm(60, 0);
           } 
           else if (!left_brake && !right_brake) {
+              vesc_set_rpm(60, 0);
               angle_diff = adc_b0 - center_angle;
               if(angle_diff > 0) {
                 period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
@@ -604,14 +562,16 @@ int main(void)
           } 
               if (!right_brake && left_brake) {   
                   control.f_l = control.b_l = period_bort;
-                  control.f_r = control.b_r = 0;                  
+                  control.f_r = control.b_r = 0; 
+                  vesc_set_rpm(60, -7000);                 
               } else if (!left_brake && right_brake) {   
                   control.f_l = control.b_l = 0;
-                  control.f_r = control.b_r = period_bort;                                
+                  control.f_r = control.b_r = period_bort;
+                  vesc_set_rpm(60, 7000);                                
               }          
             } else {
           control = (struct control_status){0};
-        }
+        
           period_left = CalculatePeriod(control.f_l);
           period_right = CalculatePeriod(control.f_r);   
       }
