@@ -102,7 +102,7 @@ volatile uint32_t tim1_ch1_pulse = 2000 - 1;
 volatile uint32_t tim1_ch2_pulse = 2000 - 1;
 volatile uint32_t tim1_ch3_pulse = 2000 - 1;
 volatile uint32_t tim1_ch4_pulse = 20000 - 1;
-
+int switchactivity = 0;
 
 typedef enum {
   BTN_IDLE,
@@ -270,50 +270,84 @@ void StartButtonMeasurement()
     HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4); // Запускаем таймер
 }
 
+void StartSwitchMeasurement()
+{
+    switchactivity = 1;
+    // Получение текущих значений
+    __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC4);
+    HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
+    uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_4);
+    uint32_t timer_period = htim1.Instance->ARR;
+    
+    // Расчет нового значения с защитой от переполнения
+    uint32_t new_compare = current_compare + tim1_ch4_pulse;
+    if (new_compare > timer_period) {
+        new_compare -= timer_period;
+        
+        // Дополнительная корректировка если нужно
+        new_compare = new_compare % (timer_period + 1);
+    }
+    
+    // Установка нового значения
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, new_compare);
+    HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_4); // Запускаем таймер
+}
+
 // Обработчик EXTI (считаем нажатия)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   
   if (master == true) {
+    if (GPIO_Pin == COMP_ADC_7_Pin)
+    {
+      StartSwitchMeasurement();
+      vesc_set_rpm(60, -1000);
+    }
+    if (GPIO_Pin == COMP_ADC_8_Pin)
+    {
+      StartSwitchMeasurement();
+      vesc_set_rpm(60, 1000);
+    }
     if (GPIO_Pin == COMP_ADC_3_Pin)
     {
-      uint32_t now = HAL_GetTick();
+      Selector = 'D';
+    //   uint32_t now = HAL_GetTick();
 
-       // Быстрая проверка антидребезга (50ms)
-       if (now - last_button_press_time < DEBOUNCE_DELAY_MS) {
-        button_debounce_flag = 1;  // Флаг дребезга
-        return;
-    }
+    //    // Быстрая проверка антидребезга (50ms)
+    //    if (now - last_button_press_time < DEBOUNCE_DELAY_MS) {
+    //     button_debounce_flag = 1;  // Флаг дребезга
+    //     return;
+    // }
     
-    // Если дошли сюда - нажатие валидное
-    last_button_press_time = now;
-    button_valid_press = 1;
-    button_debounce_flag = 0;
+    // // Если дошли сюда - нажатие валидное
+    // last_button_press_time = now;
+    // button_valid_press = 1;
+    // button_debounce_flag = 0;
     
-    // Обработка состояний
-    if (!measurementActive) {
-        if (!firstPressDetected) {
-            firstPressDetected = 1;
-            StartButtonMeasurement();
-        }
-    } else {
-        // Обработка повторных нажатий
-        uint32_t new_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_4) + tim1_ch4_pulse;
-        if (new_compare > htim1.Instance->ARR) {
-            new_compare = new_compare % (htim1.Instance->ARR + 1);
-        }
-        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, new_compare);
-        buttonPressCount++;
+    // // Обработка состояний
+    // if (!measurementActive) {
+    //     if (!firstPressDetected) {
+    //         firstPressDetected = 1;
+    //         StartButtonMeasurement();
+    //     }
+    // } else {
+    //     // Обработка повторных нажатий
+    //     uint32_t new_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_4) + tim1_ch4_pulse;
+    //     if (new_compare > htim1.Instance->ARR) {
+    //         new_compare = new_compare % (htim1.Instance->ARR + 1);
+    //     }
+    //     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, new_compare);
+    //     buttonPressCount++;
+    // }
     }
-  }
     if (GPIO_Pin == COMP_ADC_4_Pin)
     {   
-        if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC4) == RESET) {
-          HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
-        }
-        measurementActive = 0; // Останавливаем подсчет
-        firstPressDetected = 0;
-        buttonPressCount = 0;
+        // if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC4) == RESET) {
+        //   HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
+        // }
+        // measurementActive = 0; // Останавливаем подсчет
+        // firstPressDetected = 0;
+        // buttonPressCount = 0;
         Selector = 'R';
     }
   }  
@@ -534,20 +568,22 @@ int main(void)
       adc_b0 = (ADS_RES_BUFFER[0]);
       current_angle = adc_b0;       
       if (master == true) {
-        if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC4) == RESET) {
           if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
             Selector = 'N';
           } 
-        }       
-        
+
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);
           if (left_brake && right_brake) {
             control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
-            vesc_set_rpm(60, 0);
+            if (switchactivity == 0) {
+              vesc_set_rpm(60, 0);
+            }
           } 
           else if (!left_brake && !right_brake) {
-              vesc_set_rpm(60, 0);
+              if (switchactivity == 0) {
+                vesc_set_rpm(60, 0);
+              }
               angle_diff = adc_b0 - center_angle;
               if(angle_diff > 0) {
                 period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
@@ -562,12 +598,16 @@ int main(void)
           } 
               if (!right_brake && left_brake) {   
                   control.f_l = control.b_l = period_bort;
-                  control.f_r = control.b_r = 0; 
-                  vesc_set_rpm(60, -7000);                 
+                  control.f_r = control.b_r = 0;
+                  if (switchactivity == 0) {
+                    vesc_set_rpm(60, -7000);
+                  }
               } else if (!left_brake && right_brake) {   
                   control.f_l = control.b_l = 0;
                   control.f_r = control.b_r = period_bort;
-                  vesc_set_rpm(60, 7000);                                
+                  if (switchactivity == 0) {  
+                    vesc_set_rpm(60, 7000);
+                  }                                
               }          
             } else {
           control = (struct control_status){0};
@@ -1030,7 +1070,10 @@ static void MX_TIM4_Init(void)
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
+  { 
+    __HAL_TIM_CLEAR_IT(&htim4, TIM_IT_CC1);
+    HAL_TIM_OC_Stop_IT(&htim4, TIM_CHANNEL_1);
+
     Error_Handler();
   }
   if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
@@ -1210,19 +1253,21 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4){
       __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC4);
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
-      measurementActive = 0; // Останавливаем подсчет
-      firstPressDetected = 0; // Сбрасываем флаг первого нажатия             
-      if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
-        Selector = 'N';
-      }      
-      else if (Read_GPIO_Pin(comp[2]) == 1 && Read_GPIO_Pin(comp[3]) == 0) {
-        switch(buttonPressCount) {         
-          case 1:  Selector = 'D'; break;
-          case 2:  Selector = '2'; break;
-          case 3: Selector = '1'; break; // Все случаи ≥ 3
-          default: Selector = 'P'; break; // Все случаи ≥ 3
-        }        
-      }    
+      switchactivity = 0;
+      vesc_set_rpm(60, 0);
+      // measurementActive = 0; // Останавливаем подсчет
+      // firstPressDetected = 0; // Сбрасываем флаг первого нажатия             
+      // if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
+      //   Selector = 'N';
+      // }      
+      // else if (Read_GPIO_Pin(comp[2]) == 1 && Read_GPIO_Pin(comp[3]) == 0) {
+      //   switch(buttonPressCount) {         
+      //     case 1:  Selector = 'D'; break;
+      //     case 2:  Selector = '2'; break;
+      //     case 3: Selector = '1'; break; // Все случаи ≥ 3
+      //     default: Selector = 'P'; break; // Все случаи ≥ 3
+      //   }        
+      // }    
     }
     }  
 }
