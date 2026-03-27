@@ -103,6 +103,9 @@ volatile uint32_t tim1_ch2_pulse = 2000 - 1;
 volatile uint32_t tim1_ch3_pulse = 2000 - 1;
 volatile uint32_t tim1_ch4_pulse = 20000 - 1;
 int switchactivity = 0;
+int emergency_stop_right = 0;
+int emergency_stop_left = 0;
+int rpm_calc;
 
 typedef enum {
   BTN_IDLE,
@@ -197,22 +200,19 @@ FoldingSystem folding_sys = {0};
 #define MAX_ANGLE right_angle   // Максимальный угол (1163)
 #define SAFETY_MARGIN 20        // Запас до границ
 
-#define ENCODER_LEFT         186
-#define ENCODER_CENTER       638
-#define ENCODER_RIGHT        1163
-
 // CAN VESC
 #define VESC_CAN_ID          0x01
 #define VESC_CMD_POSITION    4
 
-// Кинематика (оборотов мотора на 1 единицу энкодера)
-// НУЖНО ПОДОБРАТЬ ЭКСПЕРИМЕНТАЛЬНО!
-#define REVS_PER_UNIT        0.01f
+#define LEFT_LIMIT      186
+#define CENTER          638
+#define RIGHT_LIMIT     1163
+#define DEADZONE        10      // Мертвая зона центра
+#define SAFETY_MARGIN   5       // Запас до края
 
-// Параметры движения
-#define SPEED                1.5f        // Скорость движения (оборотов/сек)
-#define CONTROL_FREQ         50          // 50 Гц
-#define CENTER_DEADZONE      10          // Мертвая зона (единицы энкодера)
+// Параметры скорости
+#define MAX_RPM  200   // Максимальные обороты
+#define MIN_RPM_EDGE    0     // Минимальные обороты (при малом отклонении)
 
 int current_angle; 
 float target_revs = 0;       // Целевые обороты мотора
@@ -489,6 +489,7 @@ void vesc_set_rpm(uint8_t id_vesc, int32_t erpm) {
   
   HAL_CAN_AddTxMessage(&hcan, &tx_header, data, &tx_mailbox);
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -565,9 +566,9 @@ int main(void)
       __WFI(); // Wait for interrupt (энергоэффективно)
        //  /* USER CODE END WHILE */
       // HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
-      adc_b0 = (ADS_RES_BUFFER[0]);
-      current_angle = adc_b0;       
+      adc_b0 = (ADS_RES_BUFFER[0]);      
       if (master == true) {
+          angle_diff = adc_b0 - center_angle;
           if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
             Selector = 'N';
           } 
@@ -584,7 +585,6 @@ int main(void)
               if (switchactivity == 0) {
                 vesc_set_rpm(60, 0);
               }
-              angle_diff = adc_b0 - center_angle;
               if(angle_diff > 0) {
                 period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
                 control.f_l = control.b_l = period_drive;                   
@@ -599,19 +599,21 @@ int main(void)
               if (!right_brake && left_brake) {   
                   control.f_l = control.b_l = period_bort;
                   control.f_r = control.b_r = 0;
-                  if (switchactivity == 0) {
-                    vesc_set_rpm(60, -7000);
+                  if (switchactivity == 0 && angle_diff > 0) {
+                    rpm_calc = ((float)MAX_RPM/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
+                                        //200/1163-638*((1163-638)-525)=  
+                    //vesc_set_rpm(60, (int32_t)rpm_calc);
                   }
               } else if (!left_brake && right_brake) {   
                   control.f_l = control.b_l = 0;
                   control.f_r = control.b_r = period_bort;
-                  if (switchactivity == 0) {  
-                    vesc_set_rpm(60, 7000);
+                  if (switchactivity == 0 && angle_diff < 0) { 
+                    rpm_calc = ((float)MAX_RPM/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
+                    //vesc_set_rpm(60, (int32_t)rpm_calc);   
                   }                                
               }          
             } else {
           control = (struct control_status){0};
-        
           period_left = CalculatePeriod(control.f_l);
           period_right = CalculatePeriod(control.f_r);   
       }
