@@ -84,9 +84,9 @@ static void MX_TIM1_Init(void);
 static void MX_CAN_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
-const int center_angle=638; //638
-const int left_angle=186; //1163
-const int right_angle=1163; //186
+const int center_angle=652; //638
+const int left_angle=1000; //1163
+const int right_angle=200; //186
 int angle_diff;
 int adc_b0=0;
 int period_brake=50;
@@ -105,7 +105,8 @@ volatile uint32_t tim1_ch4_pulse = 20000 - 1;
 int switchactivity = 0;
 int emergency_stop_right = 0;
 int emergency_stop_left = 0;
-int rpm_calc;
+int32_t rpm_calc = 0;
+int32_t erpm;
 
 typedef enum {
   BTN_IDLE,
@@ -190,19 +191,14 @@ typedef struct {
 } FoldingSystem;
 
 FoldingSystem folding_sys = {0};
+
 #define VESC_CAN_ID 60
-#define FOLDING_SPEED_RPM 100.0f      // Скорость вращения мотора
-#define CENTER_RETURN_DELAY 500       // Задержка перед возвратом в центр (мс)
-#define CENTER_TOLERANCE 15           // Допуск для центрального положения
 
 // Граничные углы для защиты от перескладывания
 #define MIN_ANGLE left_angle    // Минимальный угол (186)
 #define MAX_ANGLE right_angle   // Максимальный угол (1163)
 #define SAFETY_MARGIN 20        // Запас до границ
 
-// CAN VESC
-#define VESC_CAN_ID          0x01
-#define VESC_CMD_POSITION    4
 
 #define LEFT_LIMIT      186
 #define CENTER          638
@@ -211,11 +207,10 @@ FoldingSystem folding_sys = {0};
 #define SAFETY_MARGIN   5       // Запас до края
 
 // Параметры скорости
-#define MAX_RPM  200   // Максимальные обороты
+#define MAX_RPM  4000   // Максимальные обороты
 #define MIN_RPM_EDGE    0     // Минимальные обороты (при малом отклонении)
 
-int current_angle; 
-float target_revs = 0;       // Целевые обороты мотора
+
 /* USER CODE END PFP */
 // Функция для чтения состояния пина с использованием структуры
 int Read_GPIO_Pin(GPIO_Config config) {
@@ -301,12 +296,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     if (GPIO_Pin == COMP_ADC_7_Pin)
     {
       StartSwitchMeasurement();
-      vesc_set_rpm(60, -1000);
+     // vesc_set_rpm(60, -100);
     }
     if (GPIO_Pin == COMP_ADC_8_Pin)
     {
       StartSwitchMeasurement();
-      vesc_set_rpm(60, 1000);
+     // vesc_set_rpm(60, 100);
     }
     if (GPIO_Pin == COMP_ADC_3_Pin)
     {
@@ -436,6 +431,29 @@ void CAN_SendMessage(uint32_t StdId, uint8_t* data, uint8_t dataLength) {
         //Error_Handler();
     }
 }
+void CAN_SendMessage_VESC() {
+  uint8_t data[4];
+  
+  // Упаковка 32-битного числа в big-endian
+  data[0] = (erpm >> 24) & 0xFF;
+  data[1] = (erpm >> 16) & 0xFF;
+  data[2] = (erpm >> 8) & 0xFF;
+  data[3] = erpm & 0xFF;
+  
+  // Формирование CAN ID: (команда << 8) | ID контроллера
+  uint32_t can_id = (CAN_PACKET_SET_RPM << 8) | VESC_CAN_ID;
+  
+  CAN_TxHeaderTypeDef tx_header;
+  uint32_t tx_mailbox;
+  
+  tx_header.ExtId = can_id;
+  tx_header.IDE = CAN_ID_EXT;      // Расширенный ID (29 бит)
+  tx_header.RTR = CAN_RTR_DATA;
+  tx_header.DLC = 4;
+  tx_header.TransmitGlobalTime = DISABLE;
+  
+  HAL_CAN_AddTxMessage(&hcan, &tx_header, data, &tx_mailbox);
+}
 
 void CreateCANMessages() {
   uint8_t data_comp[8];
@@ -447,6 +465,7 @@ void CreateCANMessages() {
   CAN_SendMessage(stdid, data_comp, 8);
 
   if (master == true) {
+      CAN_SendMessage_VESC();
       // Отправка данных селектора АКПП
       uint8_t data_akpp[1] = {Selector};
       uint32_t stdid = generate_stdid(device_id, BASE_AKPP, AKPP_COUNT);      
@@ -464,31 +483,7 @@ void CreateCANMessages() {
   }
 }
 
-// Функция отправки RPM команды на VESC
-void vesc_set_rpm(uint8_t id_vesc, int32_t erpm) {
-  uint8_t data[4];
-  int32_t idx = 0;
-  
-  // Упаковка 32-битного числа в big-endian
-  data[0] = (erpm >> 24) & 0xFF;
-  data[1] = (erpm >> 16) & 0xFF;
-  data[2] = (erpm >> 8) & 0xFF;
-  data[3] = erpm & 0xFF;
-  
-  // Формирование CAN ID: (команда << 8) | ID контроллера
-  uint32_t can_id = (CAN_PACKET_SET_RPM << 8) | id_vesc;
-  
-  CAN_TxHeaderTypeDef tx_header;
-  uint32_t tx_mailbox;
-  
-  tx_header.ExtId = can_id;
-  tx_header.IDE = CAN_ID_EXT;      // Расширенный ID (29 бит)
-  tx_header.RTR = CAN_RTR_DATA;
-  tx_header.DLC = 4;
-  tx_header.TransmitGlobalTime = DISABLE;
-  
-  HAL_CAN_AddTxMessage(&hcan, &tx_header, data, &tx_mailbox);
-}
+
 
 /* USER CODE END 0 */
 
@@ -578,12 +573,12 @@ int main(void)
           if (left_brake && right_brake) {
             control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
             if (switchactivity == 0) {
-              vesc_set_rpm(60, 0);
+              erpm = 0;
             }
           } 
           else if (!left_brake && !right_brake) {
               if (switchactivity == 0) {
-                vesc_set_rpm(60, 0);
+                erpm = 0;
               }
               if(angle_diff > 0) {
                 period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
@@ -591,7 +586,7 @@ int main(void)
                 control.f_r = control.b_r = period_calc;                     
               } else if (angle_diff < 0) {
                period_calc = ((float)period_drive/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
-                              //(60/1163-638)*(1163-638+164)
+                              //(60/1163-638)*(1163-638+0)
                 control.f_l = control.b_l = period_calc;                     
                 control.f_r = control.b_r = period_drive;                      
               }                 
@@ -599,17 +594,37 @@ int main(void)
               if (!right_brake && left_brake) {   
                   control.f_l = control.b_l = period_bort;
                   control.f_r = control.b_r = 0;
-                  if (switchactivity == 0 && angle_diff > 0) {
-                    rpm_calc = ((float)MAX_RPM/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
-                                        //200/1163-638*((1163-638)-525)=  
-                    //vesc_set_rpm(60, (int32_t)rpm_calc);
+                  if (switchactivity == 0) {
+                    if (adc_b0 > center_angle ) {
+                      float rpm_mechanical = ((float)MAX_RPM/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
+                                          //(200/(1087-652))*((1087-652)-435)=  
+                      erpm = (int32_t)(rpm_mechanical);
+
+                    }
+                    if (adc_b0 >= left_angle)
+                    {
+                      erpm = 0;
+                    }
+                    if (adc_b0 < center_angle) {
+                      erpm = MAX_RPM;
+
+                    }
                   }
               } else if (!left_brake && right_brake) {   
                   control.f_l = control.b_l = 0;
                   control.f_r = control.b_r = period_bort;
-                  if (switchactivity == 0 && angle_diff < 0) { 
-                    rpm_calc = ((float)MAX_RPM/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
-                    //vesc_set_rpm(60, (int32_t)rpm_calc);   
+                  if (switchactivity == 0) { 
+                    if (adc_b0 < center_angle) {
+                      float rpm_mechanical = ((float)MAX_RPM/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
+                      erpm = (int32_t)(-rpm_mechanical);
+                    } 
+                    if (adc_b0 <= right_angle)
+                    {
+                      erpm = 0;
+                    }
+                    if (adc_b0 > center_angle) {
+                      erpm = -MAX_RPM;
+                    }
                   }                                
               }          
             } else {
@@ -798,7 +813,7 @@ static void MX_ADC1_Init(void)
   */
   hadc1.Instance = ADC1;
   hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
@@ -1256,7 +1271,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
       __HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC4);
       HAL_TIM_OC_Stop_IT(&htim1, TIM_CHANNEL_4);
       switchactivity = 0;
-      vesc_set_rpm(60, 0);
+      erpm = 0;
       // measurementActive = 0; // Останавливаем подсчет
       // firstPressDetected = 0; // Сбрасываем флаг первого нажатия             
       // if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
