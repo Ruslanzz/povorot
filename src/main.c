@@ -69,6 +69,12 @@ CAN_TxHeaderTypeDef TxHeader;
 uint8_t TxData[8];
 CAN_RxHeaderTypeDef RxHeader;
 uint8_t RxData[8]; // Буфер для данных CAN-сообщени
+CAN_TxHeaderTypeDef TxHeader_Std;   // Для стандартных ID (11 бит)
+CAN_TxHeaderTypeDef TxHeader_Ext;   // Для расширенных ID (29 бит)
+uint8_t TxData_Std[8];              // Данные для стандартных сообщений
+uint8_t TxData_Ext[8];              // Данные для расширенных сообщений
+uint32_t TxMailbox_Std;   // Для стандартных сообщений
+uint32_t TxMailbox_Ext;   // Для расширенных сообщений
 volatile int32_t buttonPressCount = 0;
 volatile uint8_t measurementActive = 0;
 volatile uint8_t firstPressDetected = 0; // Флаг первого нажатия
@@ -85,8 +91,8 @@ static void MX_CAN_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
 const int center_angle=652; //638
-const int left_angle=1000; //1163
-const int right_angle=200; //186
+const int left_angle=1100; //1163
+const int right_angle=190; //186
 int angle_diff;
 int adc_b0=0;
 int period_brake=50;
@@ -365,6 +371,9 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
   // uint8_t RxData[8]; // Буфер для данных CAN-сообщения
 
   if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &RxHeader, RxData) == HAL_OK) {
+    if (RxHeader.IDE == CAN_ID_EXT) {
+      return;  // Выход из функции, не обрабатываем
+    }
     uint32_t stdid = RxHeader.StdId;
     // Извлекаем device_id и parameter_index из stdid
     uint8_t std_device_id = (stdid >> 8) & 0xFF; // Старшие 8 бит
@@ -383,7 +392,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     //   }        
     // }
     if (master == false){
-    if (std_device_id == 1 ) {         
+    if (std_device_id == 1 ) { //305        
       if (parameter_index == BASE_CONTROL + 1) {
         period_left = CalculatePeriod(RxData[2]);  
         period_right = CalculatePeriod(RxData[3]);                          
@@ -405,54 +414,62 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 }
 
 void CAN_SendMessage(uint32_t StdId, uint8_t* data, uint8_t dataLength) {
-    uint32_t TxMailbox = 0;
-    // Заголовок CAN-сообщения
-    TxHeader.StdId = StdId;       // Идентификатор сообщения (передаётся как параметр)
-    TxHeader.ExtId = 0x00;        // Расширенный идентификатор (не используется)
-    TxHeader.IDE = CAN_ID_STD;    // Стандартный идентификатор
-    TxHeader.RTR = CAN_RTR_DATA;  // Тип сообщения (данные)
-    TxHeader.DLC = dataLength;    // Длина данных (передаётся как параметр)
+    
+        // Заголовок CAN-сообщения
+    TxHeader_Std.StdId = StdId;       // Идентификатор сообщения (передаётся как параметр)
+    TxHeader_Std.ExtId = 0x00;        // Расширенный идентификатор (не используется)
+    TxHeader_Std.IDE = CAN_ID_STD;    // Стандартный идентификатор
+    TxHeader_Std.RTR = CAN_RTR_DATA;  // Тип сообщения (данные)
+    TxHeader_Std.DLC = dataLength;    // Длина данных (передаётся как параметр)
 
     // Копирование данных в TxData
     for (uint8_t i = 0; i < dataLength; i++) {
-        TxData[i] = data[i];  // Копируем данные из переданного массива
+        TxData_Std[i] = data[i];  // Копируем данные из переданного массива
     }
 
     // Очистка оставшихся байтов (если dataLength < 8)
     if (dataLength < 8){
       for (uint8_t i = dataLength; i < 8; i++) {
-          TxData[i] = 0x00;
+          TxData_Std[i] = 0x00;
       }
     }
 
     // Отправка сообщения
-    if (HAL_CAN_AddTxMessage(&hcan, &TxHeader, TxData, &TxMailbox) != HAL_OK) {
+    if (HAL_CAN_AddTxMessage(&hcan, &TxHeader_Std, TxData_Std, &TxMailbox_Std) != HAL_OK) {
         // Обработка ошибки отправки
         //Error_Handler();
     }
 }
 void CAN_SendMessage_VESC() {
-  uint8_t data[4];
+  uint8_t data_vesc[4];
   
   // Упаковка 32-битного числа в big-endian
-  data[0] = (erpm >> 24) & 0xFF;
-  data[1] = (erpm >> 16) & 0xFF;
-  data[2] = (erpm >> 8) & 0xFF;
-  data[3] = erpm & 0xFF;
+  data_vesc[0] = (erpm >> 24) & 0xFF;
+  data_vesc[1] = (erpm >> 16) & 0xFF;
+  data_vesc[2] = (erpm >> 8) & 0xFF;
+  data_vesc[3] = erpm & 0xFF;
   
   // Формирование CAN ID: (команда << 8) | ID контроллера
   uint32_t can_id = (CAN_PACKET_SET_RPM << 8) | VESC_CAN_ID;
   
-  CAN_TxHeaderTypeDef tx_header;
-  uint32_t tx_mailbox;
+
+  // Используем отдельный заголовок для расширенных ID
+  //TxHeader_Ext.StdId = 0;
+  TxHeader_Ext.ExtId = can_id;
+  TxHeader_Ext.IDE = CAN_ID_EXT;      // Расширенный ID (29 бит)
+  TxHeader_Ext.RTR = CAN_RTR_DATA;
+  TxHeader_Ext.DLC = 4;
+  TxHeader_Ext.TransmitGlobalTime = DISABLE;
   
-  tx_header.ExtId = can_id;
-  tx_header.IDE = CAN_ID_EXT;      // Расширенный ID (29 бит)
-  tx_header.RTR = CAN_RTR_DATA;
-  tx_header.DLC = 4;
-  tx_header.TransmitGlobalTime = DISABLE;
+  // Копирование данных в отдельный буфер
+  for (uint8_t i = 0; i < 4; i++) {
+      TxData_Ext[i] = data_vesc[i];
+  }
   
-  HAL_CAN_AddTxMessage(&hcan, &tx_header, data, &tx_mailbox);
+  // Отправка
+  if (HAL_CAN_AddTxMessage(&hcan, &TxHeader_Ext, TxData_Ext, &TxMailbox_Ext) != HAL_OK) {
+      // Обработка ошибки
+  }
 }
 
 void CreateCANMessages() {
@@ -460,7 +477,8 @@ void CreateCANMessages() {
   uint32_t stdid;            
   for (uint8_t i = 0; i < 8; i++) {
       data_comp[i] = Read_GPIO_Pin(comp[i]);
-  }            
+  } 
+     
   stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
   CAN_SendMessage(stdid, data_comp, 8);
 
@@ -577,9 +595,9 @@ int main(void)
             }
           } 
           else if (!left_brake && !right_brake) {
-              if (switchactivity == 0) {
-                erpm = 0;
-              }
+              
+              erpm = 0;
+
               if(angle_diff > 0) {
                 period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
                 control.f_l = control.b_l = period_drive;                   
@@ -628,10 +646,11 @@ int main(void)
                   }                                
               }          
             } else {
-          control = (struct control_status){0};
+              control = (struct control_status){0};
+            }
           period_left = CalculatePeriod(control.f_l);
           period_right = CalculatePeriod(control.f_r);   
-      }
+      
      
 
       if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC1) == RESET) {
@@ -1154,8 +1173,9 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : COMP_ADC_5_Pin COMP_ADC_6_Pin COMP_ADC_7_Pin */
   GPIO_InitStruct.Pin = COMP_ADC_5_Pin|COMP_ADC_6_Pin|COMP_ADC_7_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;  // Убрали лишнюю точку с запятой
+  GPIO_InitStruct.Pull = GPIO_PULLUP; 
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : COMP_ADC_8_Pin */
