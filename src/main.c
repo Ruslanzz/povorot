@@ -176,7 +176,7 @@ GPIO_Config relay[] = {
 { GPIOB, EN_RELAY_5_Pin }
 };
 
-bool master = true;
+bool master = false;
 uint8_t device_id = 0x01;
 
 
@@ -502,6 +502,35 @@ void CreateCANMessages() {
 }
 
 
+void smooth_PWM_decrease_step(uint32_t start_value, uint32_t end_value, uint32_t step, uint32_t step_delay_ms)
+{
+    uint32_t current_value = start_value;
+    
+    if (start_value <= end_value) return;
+    
+    while (current_value > end_value)
+    {
+        // Устанавливаем текущее значение
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, current_value);
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, current_value);
+
+        
+        // Задержка
+        HAL_Delay(step_delay_ms);
+        
+        // Уменьшаем с заданным шагом
+        if (current_value - step >= end_value)
+            current_value -= step;
+        else
+            current_value = end_value;
+    }
+    
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, end_value);
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, end_value);
+
+}
+
+
 
 /* USER CODE END 0 */
 
@@ -572,194 +601,23 @@ int main(void)
   HAL_TIM_Base_Start(&htim1);
   HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
+  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 20000);
+   // __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 17000);
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 20000);
+  smooth_PWM_decrease_step(18000, 16000, 10, 50);
+
   
 
   while (1)
   { 
-      __WFI(); // Wait for interrupt (энергоэффективно)
-       //  /* USER CODE END WHILE */
-      // HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
-      adc_b0 = (ADS_RES_BUFFER[0]);      
-      if (master == true) {
-          angle_diff = adc_b0 - center_angle;
-          if (Read_GPIO_Pin(comp[2]) == 0 && Read_GPIO_Pin(comp[3]) == 0) {              
-            Selector = 'N';
-          } 
+   // __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 17000);
+   
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 20000);
+   // __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 17000);
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 20000);
+    
 
-          left_brake = Read_GPIO_Pin(comp[0]); 
-          right_brake = Read_GPIO_Pin(comp[1]);
-          if (left_brake && right_brake) {
-            control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
-            if (switchactivity == 0) {
-              erpm = 0;
-            }
-          } 
-          else if (!left_brake && !right_brake) {
-              
-              erpm = 0;
-
-              if(angle_diff > 0) {
-                period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
-                control.f_l = control.b_l = period_drive;                   
-                control.f_r = control.b_r = period_calc;                     
-              } else if (angle_diff < 0) {
-               period_calc = ((float)period_drive/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
-                              //(60/1163-638)*(1163-638+0)
-                control.f_l = control.b_l = period_calc;                     
-                control.f_r = control.b_r = period_drive;                      
-              }                 
-          } 
-              if (!right_brake && left_brake) {   
-                  control.f_l = control.b_l = period_bort;
-                  control.f_r = control.b_r = 0;
-                  if (switchactivity == 0) {
-                    if (adc_b0 > center_angle ) {
-                      float rpm_mechanical = ((float)MAX_RPM/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
-                                          //(200/(1087-652))*((1087-652)-435)=  
-                      erpm = (int32_t)(rpm_mechanical);
-
-                    }
-                    if (adc_b0 >= left_angle)
-                    {
-                      erpm = 0;
-                    }
-                    if (adc_b0 < center_angle) {
-                      erpm = MAX_RPM;
-
-                    }
-                  }
-              } else if (!left_brake && right_brake) {   
-                  control.f_l = control.b_l = 0;
-                  control.f_r = control.b_r = period_bort;
-                  if (switchactivity == 0) { 
-                    if (adc_b0 < center_angle) {
-                      float rpm_mechanical = ((float)MAX_RPM/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
-                      erpm = (int32_t)(-rpm_mechanical);
-                    } 
-                    if (adc_b0 <= right_angle)
-                    {
-                      erpm = 0;
-                    }
-                    if (adc_b0 > center_angle) {
-                      erpm = -MAX_RPM;
-                    }
-                  }                                
-              }          
-            } else {
-              control = (struct control_status){0};
-            }
-          period_left = CalculatePeriod(control.f_l);
-          period_right = CalculatePeriod(control.f_r);   
       
-     
-
-      if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC1) == RESET) {
-            if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) == 0) && (period_left < period) && (coil.l == 0)) {                    
-              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, period);
-              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
-              coil.l = 1;  
-
-              // Получение текущих значений
-              uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_1);
-              uint32_t timer_period = htim1.Instance->ARR;
-              
-              // Расчет нового значения с защитой от переполнения
-              uint32_t new_compare = current_compare + tim1_ch1_pulse;
-              if (new_compare > timer_period) {
-                  new_compare -= timer_period;
-                  
-                  // Дополнительная корректировка если нужно
-                  new_compare = new_compare % (timer_period + 1);
-              }
-              
-              // Установка нового значения
-              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, new_compare);             
-              HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);  
-                      
-            }       
-            if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) > 0) && (coil.l == 0)) {
-              if (period_left == period){ 
-                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period);                   
-                __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 0);          
-                coil.l = 2;
-               
-              // Получение текущих значений
-              uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_1);
-              uint32_t timer_period = htim1.Instance->ARR;
-              
-              // Расчет нового значения с защитой от переполнения
-              uint32_t new_compare = current_compare + tim1_ch1_pulse;
-              if (new_compare > timer_period) {
-                  new_compare -= timer_period;
-                  
-                  // Дополнительная корректировка если нужно
-                  new_compare = new_compare % (timer_period + 1);
-              }
-              
-              // Установка нового значения
-              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, new_compare);
-                HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
-              }
-              if (period_left < period){
-                if (coil.l == 0){
-              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, period_left);        
-              }
-              }        
-            }
-          }
-      
-      if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC2) == RESET) {
-          if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) == 0) && (period_right < period) && (coil.r == 0)) {                    
-            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, period);
-            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
-            coil.r = 1; 
-            
-              // Получение текущих значений
-              uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_2);
-              uint32_t timer_period = htim1.Instance->ARR;
-              
-              // Расчет нового значения с защитой от переполнения
-              uint32_t new_compare = current_compare + tim1_ch2_pulse;
-              if (new_compare > timer_period) {
-                  new_compare -= timer_period;
-                  
-                  // Дополнительная корректировка если нужно
-                  new_compare = new_compare % (timer_period + 1);
-              }
-              
-              // Установка нового значения
-              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, new_compare);
-              HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2); 
-          }       
-          if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_4) > 0) && (coil.r == 0)) {
-            if (period_right == period){
-              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period);                    
-              __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);        
-              coil.r = 2;          
-              // Получение текущих значений
-              uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_2);
-              uint32_t timer_period = htim1.Instance->ARR;
-              
-              // Расчет нового значения с защитой от переполнения
-              uint32_t new_compare = current_compare + tim1_ch2_pulse;
-              if (new_compare > timer_period) {
-                  new_compare -= timer_period;
-                  
-                  // Дополнительная корректировка если нужно
-                  new_compare = new_compare % (timer_period + 1);
-              }
-              
-              // Установка нового значения
-              __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, new_compare);  
-              HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_2);
-            }
-            if (period_right < period){
-              if (coil.r == 0){
-            __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, period_right);        
-            }
-            }        
-          }
-        }
   }
   /* USER CODE END 3 */
 }
@@ -1269,7 +1127,7 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim) {
     }
     if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3){   
       //__HAL_TIM_CLEAR_IT(&htim1, TIM_IT_CC3);   
-      CreateCANMessages();
+      //CreateCANMessages();
      // Получение текущих значений
       uint32_t current_compare = __HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_3);
       uint32_t timer_period = htim1.Instance->ARR;
