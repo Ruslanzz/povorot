@@ -106,7 +106,7 @@ GPIO_PinState left_brake;
 GPIO_PinState right_brake;
 volatile uint32_t tim1_ch1_pulse = 2000 - 1;
 volatile uint32_t tim1_ch2_pulse = 2000 - 1;
-volatile uint32_t tim1_ch3_pulse = 2000 - 1;
+volatile uint32_t tim1_ch3_pulse = 200 - 1;
 volatile uint32_t tim1_ch4_pulse = 20000 - 1;
 int switchactivity = 0;
 int emergency_stop_right = 0;
@@ -213,10 +213,20 @@ FoldingSystem folding_sys = {0};
 #define SAFETY_MARGIN   5       // Запас до края
 
 // Параметры скорости
-#define MAX_RPM  4000   // Максимальные обороты
+#define MAX_RPM  10000   // Максимальные обороты
 #define MIN_RPM_EDGE    0     // Минимальные обороты (при малом отклонении)
 
+typedef struct {
+  uint32_t total_attempts;
+  uint32_t hal_ok;
+  uint32_t hal_error;
+  uint32_t hal_busy;
+  uint32_t hal_timeout;
+  uint32_t last_error_code;
+  uint32_t last_error_mailbox;
+} CAN_Debug_t;
 
+volatile CAN_Debug_t can_debug = {0};
 /* USER CODE END PFP */
 // Функция для чтения состояния пина с использованием структуры
 int Read_GPIO_Pin(GPIO_Config config) {
@@ -392,8 +402,8 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     //   }        
     // }
     if (master == false){
-    if (std_device_id == 1 ) { //305        
-      if (parameter_index == BASE_CONTROL + 1) {
+    if (std_device_id == 0x01 ) {         
+      if (parameter_index == BASE_CONTROL + 1) { //305
         period_left = CalculatePeriod(RxData[2]);  
         period_right = CalculatePeriod(RxData[3]);                          
         // HAL_GPIO_WritePin(GPIOB, EN_RELAY_1_Pin, (RxData[0] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -401,26 +411,51 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
         // HAL_GPIO_WritePin(GPIOB, EN_RELAY_3_Pin, (RxData[2] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
         // HAL_GPIO_WritePin(GPIOB, EN_RELAY_4_Pin, (RxData[3] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);         
         }
-      
+    
       if (parameter_index == BASE_COMP + 1) {
-        HAL_GPIO_WritePin(GPIOB, EN_RELAY_1_Pin, (RxData[0] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);//левый поворот
-        HAL_GPIO_WritePin(GPIOB, EN_RELAY_2_Pin, (RxData[1] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);//правый поворот
-        HAL_GPIO_WritePin(GPIOB, EN_RELAY_3_Pin, (RxData[3] == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET); //задний ход
+        uint8_t left_turn = RxData[0];   // Левый поворот
+        uint8_t right_turn = RxData[1];  // Правый поворот
+        
+        HAL_GPIO_WritePin(GPIOB, EN_RELAY_1_Pin, (left_turn == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOB, EN_RELAY_2_Pin, (right_turn == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        
+        // Управление стоп-сигналом (аварийная сигнализация)
+        if (left_turn && right_turn) {  // Оба активны
+            HAL_GPIO_WritePin(GPIOB, EN_RELAY_4_Pin, GPIO_PIN_SET);  // Включаем стоп-сигнал
+            
+            HAL_GPIO_WritePin(GPIOB, EN_RELAY_1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, EN_RELAY_2_Pin, GPIO_PIN_RESET);
+        } else {
+            HAL_GPIO_WritePin(GPIOB, EN_RELAY_4_Pin, GPIO_PIN_RESET); // Выключаем
+            HAL_GPIO_WritePin(GPIOB, EN_RELAY_1_Pin, (left_turn == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, EN_RELAY_2_Pin, (right_turn == 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        }
+      }
 
-      } 
-    }              
+      if (parameter_index == BASE_AKPP + AKPP_COUNT) {      
+          if (RxData[0] == 'R') {          
+            HAL_GPIO_WritePin(GPIOB, EN_RELAY_3_Pin, GPIO_PIN_SET );//задний ход вкл
+          }
+          else {
+            HAL_GPIO_WritePin(GPIOB, EN_RELAY_3_Pin, GPIO_PIN_RESET );//задний ход выкл
+          }
+        }
+      }              
     }
   }
 }
 
 void CAN_SendMessage(uint32_t StdId, uint8_t* data, uint8_t dataLength) {
     
+
         // Заголовок CAN-сообщения
     TxHeader_Std.StdId = StdId;       // Идентификатор сообщения (передаётся как параметр)
     TxHeader_Std.ExtId = 0x00;        // Расширенный идентификатор (не используется)
     TxHeader_Std.IDE = CAN_ID_STD;    // Стандартный идентификатор
     TxHeader_Std.RTR = CAN_RTR_DATA;  // Тип сообщения (данные)
     TxHeader_Std.DLC = dataLength;    // Длина данных (передаётся как параметр)
+
+
 
     // Копирование данных в TxData
     for (uint8_t i = 0; i < dataLength; i++) {
@@ -434,10 +469,28 @@ void CAN_SendMessage(uint32_t StdId, uint8_t* data, uint8_t dataLength) {
       }
     }
 
-    // Отправка сообщения
-    if (HAL_CAN_AddTxMessage(&hcan, &TxHeader_Std, TxData_Std, &TxMailbox_Std) != HAL_OK) {
-        // Обработка ошибки отправки
-        //Error_Handler();
+
+    uint32_t TxMailbox_Std;
+    uint8_t result = HAL_CAN_AddTxMessage(&hcan, &TxHeader_Std, TxData_Std, &TxMailbox_Std);
+
+    switch(result) {
+        case HAL_OK:
+            can_debug.hal_ok++;
+            break;
+        case HAL_ERROR:
+            can_debug.hal_error++;
+            can_debug.last_error_code = result;
+            can_debug.last_error_mailbox = TxMailbox_Std;
+            break;
+        case HAL_BUSY:
+            can_debug.hal_busy++;
+            can_debug.last_error_code = result;
+            // Проверяем какой почтовый ящик свободен
+            break;
+        case HAL_TIMEOUT:
+            can_debug.hal_timeout++;
+            can_debug.last_error_code = result;
+            break;
     }
 }
 void CAN_SendMessage_VESC() {
@@ -473,31 +526,47 @@ void CAN_SendMessage_VESC() {
 }
 
 void CreateCANMessages() {
-  uint8_t data_comp[8];
-  uint32_t stdid;            
-  for (uint8_t i = 0; i < 8; i++) {
-      data_comp[i] = Read_GPIO_Pin(comp[i]);
-  } 
-     
-  stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
-  CAN_SendMessage(stdid, data_comp, 8);
+  static uint8_t send_phase = 0;
+  switch(send_phase) {
+    case 0: {
+            uint8_t data_comp[8];
+            uint32_t stdid;            
+            for (uint8_t i = 0; i < 8; i++) {
+                data_comp[i] = Read_GPIO_Pin(comp[i]);
+            } 
+            stdid = generate_stdid(device_id, BASE_COMP, COMP_COUNT);      
+            CAN_SendMessage(stdid, data_comp, 8);
+            if (master == true) {
+              send_phase = 1;
+            }
+            else {
+              send_phase = 0;
+            }
+            break;
+          }
+    case 1:
+            {
+              CAN_SendMessage_VESC();
+            send_phase = 2;
+          }
+    case 2:
+           { // Отправка данных селектора АКПП
+            uint8_t data_akpp[1] = {Selector};
+            uint32_t stdid1 = generate_stdid(device_id, BASE_AKPP, AKPP_COUNT);      
+            CAN_SendMessage(stdid1, data_akpp, 1); 
+            send_phase = 3; }
+    case 3:
+            {// Отправка контрольных данных
+            uint8_t data_control[4] = {
+                control.f_r,  // TxData[0]
+                control.f_l,  // TxData[1]
+                control.b_r,  // TxData[2]
+                control.b_l   // TxData[3]
+            };
 
-  if (master == true) {
-      CAN_SendMessage_VESC();
-      // Отправка данных селектора АКПП
-      uint8_t data_akpp[1] = {Selector};
-      uint32_t stdid = generate_stdid(device_id, BASE_AKPP, AKPP_COUNT);      
-      CAN_SendMessage(stdid, data_akpp, 1);  
-
-      // Отправка контрольных данных
-      uint8_t data_control[4] = {
-          control.f_r,  // TxData[0]
-          control.f_l,  // TxData[1]
-          control.b_r,  // TxData[2]
-          control.b_l   // TxData[3]
-      };
-      stdid = generate_stdid(device_id, BASE_CONTROL, CONTROL_COUNT);
-      CAN_SendMessage(stdid, data_control, 4);
+            uint32_t stdid2 = generate_stdid(device_id, BASE_CONTROL, CONTROL_COUNT);
+            CAN_SendMessage(stdid2, data_control, 4);
+            send_phase = 0;}
   }
 }
 
@@ -572,7 +641,8 @@ int main(void)
   HAL_TIM_Base_Start(&htim1);
   HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_3);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
-  
+  HAL_GPIO_WritePin(GPIOB, EN_RELAY_5_Pin, GPIO_PIN_SET);
+
 
   while (1)
   { 
@@ -588,70 +658,193 @@ int main(void)
 
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);
-          if (left_brake && right_brake) {
-            control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
-            if (switchactivity == 0) {
-              erpm = 0;
-            }
-          } 
-          else if (!left_brake && !right_brake) {
-              
-              erpm = 0;
 
-              if(angle_diff > 0) {
-                period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
-                control.f_l = control.b_l = period_drive;                   
-                control.f_r = control.b_r = period_calc;                     
-              } else if (angle_diff < 0) {
-               period_calc = ((float)period_drive/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
-                              //(60/1163-638)*(1163-638+0)
-                control.f_l = control.b_l = period_calc;                     
-                control.f_r = control.b_r = period_drive;                      
-              }                 
-          } 
-              if (!right_brake && left_brake) {   
-                  control.f_l = control.b_l = period_bort;
-                  control.f_r = control.b_r = 0;
+          uint8_t brake_state = (left_brake ? 2 : 0) | (right_brake ? 1 : 0);
+
+          // brake_state:
+          // 0 - оба отжаты (00)
+          // 1 - только правый (01)
+          // 2 - только левый  (10)
+          // 3 - оба нажаты  (11)
+
+          switch(brake_state) {
+              case 3: // Оба тормоза нажаты (left_brake && right_brake)
+                  control.f_l = period_brake;
+                  control.b_l = period_brake;
+                  control.f_r = period_brake;
+                  control.b_r = period_brake;
+                  
                   if (switchactivity == 0) {
-                    if (adc_b0 > center_angle ) {
-                      float rpm_mechanical = ((float)MAX_RPM/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
-                                          //(200/(1087-652))*((1087-652)-435)=  
-                      erpm = (int32_t)(rpm_mechanical);
-
-                    }
-                    if (adc_b0 >= left_angle)
-                    {
                       erpm = 0;
-                    }
-                    if (adc_b0 < center_angle) {
-                      erpm = MAX_RPM;
-
-                    }
                   }
-              } else if (!left_brake && right_brake) {   
-                  control.f_l = control.b_l = 0;
-                  control.f_r = control.b_r = period_bort;
+                  break;
+                  
+              case 0: // Оба тормоза отжаты (!left_brake && !right_brake)
+                  
+                  
+                  if (angle_diff > 0) {
+                      period_calc = ((float)period_drive / (float)(right_angle - center_angle)) * 
+                                  (float)((right_angle - center_angle) - angle_diff);
+                      if (period_calc > 100) {
+                          period_calc = 100;
+                      }
+                      control.f_l = period_drive;
+                      control.b_l = period_drive;                   
+                      control.f_r = period_calc;
+                      control.b_r = period_calc;
+                      if (abs(adc_b0 - center_angle) <= 30) {
+                        erpm = 0;
+                      } 
+                      else { 
+                        erpm = -MAX_RPM;
+                      }                
+                  } 
+                  else if (angle_diff < 0) {
+                      period_calc = ((float)period_drive / (float)(left_angle - center_angle)) * 
+                                  (float)((left_angle - center_angle) - angle_diff);
+                      if (period_calc > 100) {
+                          period_calc = 100;
+                      }
+                      control.f_l = period_calc;
+                      control.b_l = period_calc;                     
+                      control.f_r = period_drive;
+                      control.b_r = period_drive;  
+                      if (abs(adc_b0 - center_angle) <= 30) {
+                        erpm = 0;
+                      } 
+                      else { 
+                        erpm = MAX_RPM;
+                      }                    
+                  }
+                  break;
+                  
+              case 2: // Только левый тормоз нажат (!right_brake && left_brake)
+                  control.f_l = 0;
+                  control.b_l = 0;
+                  control.f_r = period_bort;
+                  control.b_r = period_bort;
+                  
+                  if (switchactivity == 0) {
+                      if (adc_b0 > center_angle) {
+                          float rpm_mechanical = ((float)MAX_RPM / (float)(left_angle - center_angle)) * 
+                                                (float)((left_angle - center_angle) - angle_diff);
+                          //erpm = (int32_t)(rpm_mechanical);
+                          erpm = MAX_RPM;
+                      }
+                      else if (adc_b0 >= left_angle) {
+                          erpm = 0;
+                      }
+                      else if (adc_b0 < center_angle) {
+                          erpm = MAX_RPM;
+                      }
+                  }
+                  break;
+                  
+              case 1: // Только правый тормоз нажат (!left_brake && right_brake)
+                  control.f_l = period_bort;
+                  control.b_l = period_bort;
+                  control.f_r = 0;
+                  control.b_r = 0;
+                  
                   if (switchactivity == 0) { 
-                    if (adc_b0 < center_angle) {
-                      float rpm_mechanical = ((float)MAX_RPM/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
-                      erpm = (int32_t)(-rpm_mechanical);
-                    } 
-                    if (adc_b0 <= right_angle)
-                    {
-                      erpm = 0;
-                    }
-                    if (adc_b0 > center_angle) {
-                      erpm = -MAX_RPM;
-                    }
-                  }                                
-              }          
-            } else {
-              control = (struct control_status){0};
-            }
+                      if (adc_b0 < center_angle) {
+                          float rpm_mechanical = ((float)MAX_RPM / (float)(right_angle - center_angle)) * 
+                                                (float)((right_angle - center_angle) - angle_diff);
+                          //erpm = (int32_t)(-rpm_mechanical);
+                          erpm = -MAX_RPM;
+                      } 
+                      else if (adc_b0 <= right_angle) {
+                          erpm = 0;
+                      }
+                      else if (adc_b0 > center_angle) {
+                          erpm = -MAX_RPM;
+                      }
+                  }
+                  break;
+                  
+              default:
+                  // Неопределённое состояние - сбрасываем всё в 0
+                  control.f_l = 0;
+                  control.b_l = 0;
+                  control.f_r = 0;
+                  control.b_r = 0;
+                  break;
+          }
+
+          // Расчёт периодов ШИМ
           period_left = CalculatePeriod(control.f_l);
-          period_right = CalculatePeriod(control.f_r);   
+          period_right = CalculatePeriod(control.f_r);
+
+          // if (left_brake && right_brake) {
+          //   control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
+          //   if (switchactivity == 0) {
+          //     erpm = 0;
+          //   }
+          // } 
+          // else if (!left_brake && !right_brake) {
+              
+          //     erpm = 0;
+
+          //     if(angle_diff > 0) {
+          //       period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
+          //       if (period_calc > 100) {
+          //         period_calc = 100;
+          //     }
+          //       control.f_l = control.b_l = period_drive;                   
+          //       control.f_r = control.b_r = period_calc;                     
+          //     } else if (angle_diff < 0) {
+          //      period_calc = ((float)period_drive/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
+          //                     //(60/1163-638)*(1163-638+0)
+          //                     if (period_calc > 100) {
+          //                       period_calc = 100;
+          //                   }
+          //       control.f_l = control.b_l = period_calc;                     
+          //       control.f_r = control.b_r = period_drive;                      
+          //     }                 
+          // } 
+          //     if (!right_brake && left_brake) {   
+          //         control.f_l = control.b_l = period_bort;
+          //         control.f_r = control.b_r = 0;
+          //         if (switchactivity == 0) {
+          //           if (adc_b0 > center_angle ) {
+          //             float rpm_mechanical = ((float)MAX_RPM/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
+          //                                 //(200/(1087-652))*((1087-652)-435)=  
+          //             erpm = (int32_t)(rpm_mechanical);
+
+          //           }
+          //           if (adc_b0 >= left_angle)
+          //           {
+          //             erpm = 0;
+          //           }
+          //           if (adc_b0 < center_angle) {
+          //             erpm = MAX_RPM;
+
+          //           }
+          //         }
+          //     } else if (!left_brake && right_brake) {   
+          //         control.f_l = control.b_l = 0;
+          //         control.f_r = control.b_r = period_bort;
+          //         if (switchactivity == 0) { 
+          //           if (adc_b0 < center_angle) {
+          //             float rpm_mechanical = ((float)MAX_RPM/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
+          //             erpm = (int32_t)(-rpm_mechanical);
+          //           } 
+          //           if (adc_b0 <= right_angle)
+          //           {
+          //             erpm = 0;
+          //           }
+          //           if (adc_b0 > center_angle) {
+          //             erpm = -MAX_RPM;
+          //           }
+          //         }                                
+                       
+          //   } else {
+          //     control = (struct control_status){0};
+          //   }
+          // period_left = CalculatePeriod(control.f_l);
+          // period_right = CalculatePeriod(control.f_r);   
       
-     
+          }
 
       if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC1) == RESET) {
             if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) == 0) && (period_left < period) && (coil.l == 0)) {                    
@@ -942,9 +1135,9 @@ static void MX_CAN_Init(void)
   hcan.Init.TimeSeg1 = CAN_BS1_13TQ;
   hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
   hcan.Init.TimeTriggeredMode = DISABLE;
-  hcan.Init.AutoBusOff = DISABLE;
+  hcan.Init.AutoBusOff = ENABLE;
   hcan.Init.AutoWakeUp = DISABLE;
-  hcan.Init.AutoRetransmission = DISABLE;
+  hcan.Init.AutoRetransmission = ENABLE;
   hcan.Init.ReceiveFifoLocked = DISABLE;
   hcan.Init.TransmitFifoPriority = DISABLE;
   if (HAL_CAN_Init(&hcan) != HAL_OK)
@@ -954,11 +1147,11 @@ static void MX_CAN_Init(void)
   /* USER CODE BEGIN CAN_Init 2 */
   sFilterConfig.FilterBank = 0;
   sFilterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
-  sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT; 
-  sFilterConfig.FilterIdHigh = 0x000;
-  sFilterConfig.FilterIdLow = 0;
-  sFilterConfig.FilterMaskIdHigh = 0x0000;
-  sFilterConfig.FilterMaskIdLow = 0x0000;
+  sFilterConfig.FilterScale = CAN_FILTERSCALE_32BIT;
+  sFilterConfig.FilterIdHigh = 0x0000;
+  sFilterConfig.FilterIdLow = 0x0000;
+  sFilterConfig.FilterMaskIdHigh = 0x0000;  // Маска = 0 -> принимаем ВСЕ
+  sFilterConfig.FilterMaskIdLow = 0x0000;   // 
   sFilterConfig.FilterFIFOAssignment = CAN_RX_FIFO0;
   sFilterConfig.FilterActivation = ENABLE;
   sFilterConfig.SlaveStartFilterBank = 14;
