@@ -546,7 +546,7 @@ void CreateCANMessages() {
           }
     case 1:
             {
-              CAN_SendMessage_VESC();
+            CAN_SendMessage_VESC();
             send_phase = 2;
           }
     case 2:
@@ -666,7 +666,10 @@ int main(void)
           // 1 - только правый (01)
           // 2 - только левый  (10)
           // 3 - оба нажаты  (11)
-
+          if (Read_GPIO_Pin(comp[6]) == 0){
+            erpm = 0;
+          }
+          else {
           switch(brake_state) {
               case 3: // Оба тормоза нажаты (left_brake && right_brake)
                   control.f_l = period_brake;
@@ -770,6 +773,7 @@ int main(void)
                   control.b_r = 0;
                   break;
           }
+        }
 
           // Расчёт периодов ШИМ
           period_left = CalculatePeriod(control.f_l);
