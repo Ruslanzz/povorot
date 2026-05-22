@@ -631,28 +631,26 @@ int32_t get_erpm(uint16_t adc_value, ControlCommand control_w) {
     switch(control_w) {
         case CONTROL_CENTER:
             // Проверяем, находится ли датчик в центральной зоне
-              if (abs(adc_value - center_angle) <= tolerance) {
-                erpm = 0;
-                stearing_centr = 0;                
-              } 
-              else 
-              { if (adc_value > center_angle) {
-                // Отклонение вправо от центра
-              
-                erpm = smooth_erpm(-MAX_RPM);
-              } 
-              if (adc_value < center_angle) {
-                  // Отклонение влево от центра
-                 
+            if (abs(adc_value - center_angle) > tolerance) 
+            {
+                if (adc_value > center_angle) 
+                {             
+                  erpm = smooth_erpm(-MAX_RPM);
+                } 
+                else 
+                {
                   erpm = smooth_erpm(MAX_RPM);
-              }
+                }
             }
             break;
             
         case CONTROL_LEFT:
-            if (adc_value >= left_angle) {
+            if (adc_value >= left_angle) 
+            {
                 erpm = 0;  // Достигли упора - останавливаем
-            } else {
+            } 
+            else 
+            {
               erpm = smooth_erpm(MAX_RPM);  // Двигаемся влево (отрицательные обороты)
             }        
             break;
@@ -849,8 +847,8 @@ int main(void)
                   control.b_l = 0;
                   control.f_r = period_bort;
                   control.b_r = period_bort;
-                  
                   stearing_centr = 0;
+
                   if (switchactivity == 0) {
                     get_erpm(adc_b0, CONTROL_LEFT);
                   }
