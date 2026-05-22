@@ -576,7 +576,7 @@ static int32_t current_erpm = 0;
 static uint32_t last_update_time = 0;
 
 // Настройки плавности
-const int32_t RAMP_STEP = 5;        // Шаг изменения оборотов за один вызов
+const int32_t RAMP_STEP = 100;        // Шаг изменения оборотов за один вызов
 const uint32_t RAMP_INTERVAL_MS = 10; // Интервал между шагами (10 мс)
 const int32_t ACCELERATION = 10;     // Ускорение: +10 erpm за шаг
 
@@ -586,7 +586,7 @@ const int32_t ACCELERATION = 10;     // Ускорение: +10 erpm за шаг
  * @return int32_t - текущие обороты с учетом плавности
  */
 int32_t smooth_erpm(int32_t target_erpm) {
-    uint32_t current_time = millis(); // Или другую функцию получения времени
+    uint32_t current_time = HAL_GetTick(); // Или другую функцию получения времени
     
     // Проверяем, прошло ли достаточно времени для следующего шага
     if (current_time - last_update_time >= RAMP_INTERVAL_MS) {
@@ -635,16 +635,18 @@ int32_t get_erpm(uint16_t adc_value, ControlCommand control_w) {
                 erpm = 0;
                 stearing_centr = 0;                
               } 
-              else if (adc_value > center_angle) {
+              else 
+              { if (adc_value > center_angle) {
                 // Отклонение вправо от центра
               
-                erpm = smooth_erpm(MAX_RPM);
+                erpm = smooth_erpm(-MAX_RPM);
               } 
-              else {
+              if (adc_value < center_angle) {
                   // Отклонение влево от центра
                  
-                  erpm = smooth_erpm(-MAX_RPM);
+                  erpm = smooth_erpm(MAX_RPM);
               }
+            }
             break;
             
         case CONTROL_LEFT:
@@ -757,7 +759,7 @@ int main(void)
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);
 
-          uint8_t current_brake_state = (left_brake ? 2 : 0) | (right_brake ? 1 : 0);
+          uint8_t brake_state = (left_brake ? 2 : 0) | (right_brake ? 1 : 0);
 
           // brake_state:
           // 0 - оба отжаты (00)
@@ -765,33 +767,33 @@ int main(void)
           // 2 - только левый  (10)
           // 3 - оба нажаты  (11)
 
-          /* ==================== Debounce логика ==================== */
+          // /* ==================== Debounce логика ==================== */
     
-          if (current_brake_state != last_brake_state)
-          {
-              brake_state_last_change = HAL_GetTick();   // фиксируем момент изменения
-              last_brake_state = current_brake_state;
-          }
+          // if (current_brake_state != last_brake_state)
+          // {
+          //     brake_state_last_change = HAL_GetTick();   // фиксируем момент изменения
+          //     last_brake_state = current_brake_state;
+          // }
 
-          uint8_t brake_state;   // финальное состояние, которое будем использовать
+          // uint8_t brake_state;   // финальное состояние, которое будем использовать
 
-          if (current_brake_state == 0)   // оба отпущены
-          {
-              // Ждём 2 секунды стабильного состояния "оба отпущены"
-              if (HAL_GetTick() - brake_state_last_change >= BRAKE_DEBOUNCE_TIME)
-              {
-                  brake_state = 0;        // подтверждаем нейтраль
-              }
-              else
-              {
-                  brake_state = last_brake_state;  // пока держим предыдущее состояние
-              }
-          }
-          else
-          {
-              // Любое нажатие рычага — сразу реагируем (без задержки)
-              brake_state = current_brake_state;
-          }
+          // if (current_brake_state == 0)   // оба отпущены
+          // {
+          //     // Ждём 2 секунды стабильного состояния "оба отпущены"
+          //     if (HAL_GetTick() - brake_state_last_change >= BRAKE_DEBOUNCE_TIME)
+          //     {
+          //         brake_state = 0;        // подтверждаем нейтраль
+          //     }
+          //     else
+          //     {
+          //         brake_state = last_brake_state;  // пока держим предыдущее состояние
+          //     }
+          // }
+          // else
+          // {
+          //     // Любое нажатие рычага — сразу реагируем (без задержки)
+          //     brake_state = current_brake_state;
+          // }
 
           /* ==================== Основная логика ==================== */ 
           if (Read_GPIO_Pin(comp[6]) == 0){
