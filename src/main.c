@@ -79,6 +79,7 @@ volatile int32_t buttonPressCount = 0;
 volatile uint8_t measurementActive = 0;
 volatile uint8_t firstPressDetected = 0; // Флаг первого нажатия
 unsigned char Selector = 'N';
+int  stearing_centr = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,9 +91,9 @@ static void MX_TIM1_Init(void);
 static void MX_CAN_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
-const int center_angle=652; //638
-const int left_angle=1100; //1163
-const int right_angle=190; //186
+const int center_angle=652; 
+const int left_angle=1100; 
+const int right_angle=190; 
 int angle_diff;
 int adc_b0=0;
 int period_brake=50;
@@ -570,7 +571,100 @@ void CreateCANMessages() {
   }
 }
 
+// Глобальные/статически переменные для плавного разгона
+static int32_t current_erpm = 0;
+static uint32_t last_update_time = 0;
 
+// Настройки плавности
+const int32_t RAMP_STEP = 5;        // Шаг изменения оборотов за один вызов
+const uint32_t RAMP_INTERVAL_MS = 10; // Интервал между шагами (10 мс)
+const int32_t ACCELERATION = 10;     // Ускорение: +10 erpm за шаг
+
+/**
+ * Функция плавного изменения оборотов
+ * @param target_erpm - целевые обороты (-MAX_RPM, 0, MAX_RPM)
+ * @return int32_t - текущие обороты с учетом плавности
+ */
+int32_t smooth_erpm(int32_t target_erpm) {
+    uint32_t current_time = millis(); // Или другую функцию получения времени
+    
+    // Проверяем, прошло ли достаточно времени для следующего шага
+    if (current_time - last_update_time >= RAMP_INTERVAL_MS) {
+        last_update_time = current_time;
+        
+        if (current_erpm < target_erpm) {
+            // Увеличиваем обороты
+            current_erpm += RAMP_STEP;
+            if (current_erpm > target_erpm) current_erpm = target_erpm;
+        } 
+        else if (current_erpm > target_erpm) {
+            // Уменьшаем обороты
+            current_erpm -= RAMP_STEP;
+            if (current_erpm < target_erpm) current_erpm = target_erpm;
+        }
+    }
+    
+    return current_erpm;
+}
+
+typedef enum {
+    CONTROL_CENTER = 0,
+    CONTROL_LEFT,
+    CONTROL_RIGHT,
+    CONTROL_OFF
+} ControlCommand;
+
+/**
+ * Функция получения erpm на основе показаний датчика угла и команды управления
+ * 
+ * @param adc_value - текущее значение с АЦП (показание датчика угла)
+ * @param control - команда управления (CENTER, LEFT, RIGHT)
+ * @return int32_t - 0 (стоп), 100 (вправо/вперед), -100 (влево/назад)
+ */
+int32_t get_erpm(uint16_t adc_value, ControlCommand control_w) {
+    // Определяем допуск для центральной зоны (можно настроить)
+    const int tolerance = 30; // ±30 отсчетов АЦП
+    
+    switch(control_w) {
+        case CONTROL_CENTER:
+            // Проверяем, находится ли датчик в центральной зоне
+              if (abs(adc_value - center_angle) <= tolerance) {
+                erpm = 0;
+              } 
+              else if (adc_value > center_angle) {
+                // Отклонение вправо от центра
+              
+                erpm = smooth_erpm(MAX_RPM);
+              } 
+              else {
+                  // Отклонение влево от центра
+                 
+                  erpm = smooth_erpm(-MAX_RPM);
+              }
+            break;
+            
+        case CONTROL_LEFT:
+              if (adc_value >= left_angle) {
+                erpm = 0;  // Достигли упора - останавливаем
+            } else {
+              erpm = smooth_erpm(MAX_RPM);  // Двигаемся влево (отрицательные обороты)
+            }        
+            break;
+            
+        case CONTROL_RIGHT:
+              if (adc_value <= right_angle) {
+                erpm = 0;  // Достигли упора - останавливаем
+            } else {
+              erpm = smooth_erpm(-MAX_RPM); // Двигаемся влево (отрицательные обороты)
+            }
+            break;
+        case CONTROL_OFF:
+            erpm =0;
+            break;
+    }
+    
+    return 0; // По умолчанию - стоп
+}
 
 /* USER CODE END 0 */
 
@@ -646,7 +740,7 @@ int main(void)
 
   while (1)
   { 
-      __WFI(); // Wait for interrupt (энергоэффективно)
+      //__WFI(); // Wait for interrupt (энергоэффективно)
        //  /* USER CODE END WHILE */
       // HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADS_RES_BUFFER, 8);
       adc_b0 = (ADS_RES_BUFFER[0]);      
@@ -676,14 +770,18 @@ int main(void)
                   control.b_l = period_brake;
                   control.f_r = period_brake;
                   control.b_r = period_brake;
+                  stearing_centr = 1;
                   
                   if (switchactivity == 0) {
-                      erpm = 0;
+                    stearing_centr = 1;
+                    
+                      get_erpm(adc_b0, CONTROL_CENTER);
+                    
                   }
                   break;
                   
               case 0: // Оба тормоза отжаты (!left_brake && !right_brake)
-                  
+                  //get_erpm(adc_b0, CONTROL_OFF);
                   
                   if (angle_diff > 0) {
                       period_calc = ((float)period_drive / (float)(right_angle - center_angle)) * 
@@ -695,12 +793,7 @@ int main(void)
                       control.b_l = period_drive;                   
                       control.f_r = period_calc;
                       control.b_r = period_calc;
-                      if (abs(adc_b0 - center_angle) <= 30) {
-                        erpm = 0;
-                      } 
-                      else { 
-                        erpm = -MAX_RPM;
-                      }                
+                                    
                   } 
                   else if (angle_diff < 0) {
                       period_calc = ((float)period_drive / (float)(left_angle - center_angle)) * 
@@ -712,12 +805,7 @@ int main(void)
                       control.b_l = period_calc;                     
                       control.f_r = period_drive;
                       control.b_r = period_drive;  
-                      if (abs(adc_b0 - center_angle) <= 30) {
-                        erpm = 0;
-                      } 
-                      else { 
-                        erpm = MAX_RPM;
-                      }                    
+                    
                   }
                   break;
                   
@@ -727,19 +815,9 @@ int main(void)
                   control.f_r = period_bort;
                   control.b_r = period_bort;
                   
+                  stearing_centr = 0;
                   if (switchactivity == 0) {
-                      if (adc_b0 > center_angle) {
-                          float rpm_mechanical = ((float)MAX_RPM / (float)(left_angle - center_angle)) * 
-                                                (float)((left_angle - center_angle) - angle_diff);
-                          //erpm = (int32_t)(rpm_mechanical);
-                          erpm = MAX_RPM;
-                      }
-                      else if (adc_b0 >= left_angle) {
-                          erpm = 0;
-                      }
-                      else if (adc_b0 < center_angle) {
-                          erpm = MAX_RPM;
-                      }
+                    get_erpm(adc_b0, CONTROL_LEFT);
                   }
                   break;
                   
@@ -748,20 +826,10 @@ int main(void)
                   control.b_l = period_bort;
                   control.f_r = 0;
                   control.b_r = 0;
-                  
+                  stearing_centr = 0;
+
                   if (switchactivity == 0) { 
-                      if (adc_b0 < center_angle) {
-                          float rpm_mechanical = ((float)MAX_RPM / (float)(right_angle - center_angle)) * 
-                                                (float)((right_angle - center_angle) - angle_diff);
-                          //erpm = (int32_t)(-rpm_mechanical);
-                          erpm = -MAX_RPM;
-                      } 
-                      else if (adc_b0 <= right_angle) {
-                          erpm = 0;
-                      }
-                      else if (adc_b0 > center_angle) {
-                          erpm = -MAX_RPM;
-                      }
+                    get_erpm(adc_b0, CONTROL_RIGHT);
                   }
                   break;
                   
@@ -778,6 +846,9 @@ int main(void)
           // Расчёт периодов ШИМ
           period_left = CalculatePeriod(control.f_l);
           period_right = CalculatePeriod(control.f_r);
+          // if (stearing_centr == 1) {
+          //   get_erpm(adc_b0, CONTROL_CENTER);
+          // }
 
           // if (left_brake && right_brake) {
           //   control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
