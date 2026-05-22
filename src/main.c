@@ -614,6 +614,9 @@ typedef enum {
     CONTROL_OFF
 } ControlCommand;
 
+uint32_t brake_state_last_change = 0;
+uint8_t  last_brake_state = 0;
+#define BRAKE_DEBOUNCE_TIME  2000   // 2 секунды в миллисекундах
 /**
  * Функция получения erpm на основе показаний датчика угла и команды управления
  * 
@@ -630,6 +633,7 @@ int32_t get_erpm(uint16_t adc_value, ControlCommand control_w) {
             // Проверяем, находится ли датчик в центральной зоне
               if (abs(adc_value - center_angle) <= tolerance) {
                 erpm = 0;
+                stearing_centr = 0;                
               } 
               else if (adc_value > center_angle) {
                 // Отклонение вправо от центра
@@ -644,7 +648,7 @@ int32_t get_erpm(uint16_t adc_value, ControlCommand control_w) {
             break;
             
         case CONTROL_LEFT:
-              if (adc_value >= left_angle) {
+            if (adc_value >= left_angle) {
                 erpm = 0;  // Достигли упора - останавливаем
             } else {
               erpm = smooth_erpm(MAX_RPM);  // Двигаемся влево (отрицательные обороты)
@@ -652,7 +656,7 @@ int32_t get_erpm(uint16_t adc_value, ControlCommand control_w) {
             break;
             
         case CONTROL_RIGHT:
-              if (adc_value <= right_angle) {
+            if (adc_value <= right_angle) {
                 erpm = 0;  // Достигли упора - останавливаем
             } else {
               erpm = smooth_erpm(-MAX_RPM); // Двигаемся влево (отрицательные обороты)
@@ -753,13 +757,43 @@ int main(void)
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);
 
-          uint8_t brake_state = (left_brake ? 2 : 0) | (right_brake ? 1 : 0);
+          uint8_t current_brake_state = (left_brake ? 2 : 0) | (right_brake ? 1 : 0);
 
           // brake_state:
           // 0 - оба отжаты (00)
           // 1 - только правый (01)
           // 2 - только левый  (10)
           // 3 - оба нажаты  (11)
+
+          /* ==================== Debounce логика ==================== */
+    
+          if (current_brake_state != last_brake_state)
+          {
+              brake_state_last_change = HAL_GetTick();   // фиксируем момент изменения
+              last_brake_state = current_brake_state;
+          }
+
+          uint8_t brake_state;   // финальное состояние, которое будем использовать
+
+          if (current_brake_state == 0)   // оба отпущены
+          {
+              // Ждём 2 секунды стабильного состояния "оба отпущены"
+              if (HAL_GetTick() - brake_state_last_change >= BRAKE_DEBOUNCE_TIME)
+              {
+                  brake_state = 0;        // подтверждаем нейтраль
+              }
+              else
+              {
+                  brake_state = last_brake_state;  // пока держим предыдущее состояние
+              }
+          }
+          else
+          {
+              // Любое нажатие рычага — сразу реагируем (без задержки)
+              brake_state = current_brake_state;
+          }
+
+          /* ==================== Основная логика ==================== */ 
           if (Read_GPIO_Pin(comp[6]) == 0){
             erpm = 0;
           }
@@ -770,19 +804,19 @@ int main(void)
                   control.b_l = period_brake;
                   control.f_r = period_brake;
                   control.b_r = period_brake;
-                  stearing_centr = 1;
-                  
+                                    
                   if (switchactivity == 0) {
                     stearing_centr = 1;
-                    
-                      get_erpm(adc_b0, CONTROL_CENTER);
-                    
+                    get_erpm(adc_b0, CONTROL_CENTER);                    
                   }
                   break;
                   
               case 0: // Оба тормоза отжаты (!left_brake && !right_brake)
-                  //get_erpm(adc_b0, CONTROL_OFF);
-                  
+                  if (stearing_centr == 1) {
+                    get_erpm(adc_b0, CONTROL_CENTER);
+                  } else {
+                    erpm = 0;  
+                  }                                  
                   if (angle_diff > 0) {
                       period_calc = ((float)period_drive / (float)(right_angle - center_angle)) * 
                                   (float)((right_angle - center_angle) - angle_diff);
@@ -804,8 +838,7 @@ int main(void)
                       control.f_l = period_calc;
                       control.b_l = period_calc;                     
                       control.f_r = period_drive;
-                      control.b_r = period_drive;  
-                    
+                      control.b_r = period_drive;              
                   }
                   break;
                   
@@ -846,80 +879,8 @@ int main(void)
           // Расчёт периодов ШИМ
           period_left = CalculatePeriod(control.f_l);
           period_right = CalculatePeriod(control.f_r);
-          // if (stearing_centr == 1) {
-          //   get_erpm(adc_b0, CONTROL_CENTER);
-          // }
-
-          // if (left_brake && right_brake) {
-          //   control.f_l = control.b_l = control.f_r = control.b_r = period_brake;
-          //   if (switchactivity == 0) {
-          //     erpm = 0;
-          //   }
-          // } 
-          // else if (!left_brake && !right_brake) {
-              
-          //     erpm = 0;
-
-          //     if(angle_diff > 0) {
-          //       period_calc = ((float)period_drive/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
-          //       if (period_calc > 100) {
-          //         period_calc = 100;
-          //     }
-          //       control.f_l = control.b_l = period_drive;                   
-          //       control.f_r = control.b_r = period_calc;                     
-          //     } else if (angle_diff < 0) {
-          //      period_calc = ((float)period_drive/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
-          //                     //(60/1163-638)*(1163-638+0)
-          //                     if (period_calc > 100) {
-          //                       period_calc = 100;
-          //                   }
-          //       control.f_l = control.b_l = period_calc;                     
-          //       control.f_r = control.b_r = period_drive;                      
-          //     }                 
-          // } 
-          //     if (!right_brake && left_brake) {   
-          //         control.f_l = control.b_l = period_bort;
-          //         control.f_r = control.b_r = 0;
-          //         if (switchactivity == 0) {
-          //           if (adc_b0 > center_angle ) {
-          //             float rpm_mechanical = ((float)MAX_RPM/(float)(left_angle-center_angle))*(float)((left_angle-center_angle)-angle_diff);
-          //                                 //(200/(1087-652))*((1087-652)-435)=  
-          //             erpm = (int32_t)(rpm_mechanical);
-
-          //           }
-          //           if (adc_b0 >= left_angle)
-          //           {
-          //             erpm = 0;
-          //           }
-          //           if (adc_b0 < center_angle) {
-          //             erpm = MAX_RPM;
-
-          //           }
-          //         }
-          //     } else if (!left_brake && right_brake) {   
-          //         control.f_l = control.b_l = 0;
-          //         control.f_r = control.b_r = period_bort;
-          //         if (switchactivity == 0) { 
-          //           if (adc_b0 < center_angle) {
-          //             float rpm_mechanical = ((float)MAX_RPM/(float)(right_angle-center_angle))*(float)((right_angle-center_angle)-angle_diff);
-          //             erpm = (int32_t)(-rpm_mechanical);
-          //           } 
-          //           if (adc_b0 <= right_angle)
-          //           {
-          //             erpm = 0;
-          //           }
-          //           if (adc_b0 > center_angle) {
-          //             erpm = -MAX_RPM;
-          //           }
-          //         }                                
-                       
-          //   } else {
-          //     control = (struct control_status){0};
-          //   }
-          // period_left = CalculatePeriod(control.f_l);
-          // period_right = CalculatePeriod(control.f_r);   
       
-          }
+      }
 
       if (__HAL_TIM_GET_IT_SOURCE(&htim1, TIM_IT_CC1) == RESET) {
             if ((HAL_TIM_ReadCapturedValue(&htim4, TIM_CHANNEL_2) == 0) && (period_left < period) && (coil.l == 0)) {                    
