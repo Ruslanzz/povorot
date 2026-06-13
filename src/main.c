@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include <stdbool.h>
+#include <stdlib.h>  
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -92,7 +93,7 @@ static void MX_CAN_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
 const int center_angle=652; 
-const int left_angle=1100; 
+const int left_angle=800; 
 const int right_angle=190; 
 int angle_diff;
 int adc_b0=0;
@@ -201,10 +202,7 @@ FoldingSystem folding_sys = {0};
 
 #define VESC_CAN_ID 60
 
-// Граничные углы для защиты от перескладывания
-#define MIN_ANGLE left_angle    // Минимальный угол (186)
-#define MAX_ANGLE right_angle   // Максимальный угол (1163)
-#define SAFETY_MARGIN 20        // Запас до границ
+
 
 
 #define LEFT_LIMIT      186
@@ -226,6 +224,13 @@ typedef struct {
   uint32_t last_error_code;
   uint32_t last_error_mailbox;
 } CAN_Debug_t;
+
+typedef enum {
+  CONTROL_CENTER = 0,
+  CONTROL_LEFT,
+  CONTROL_RIGHT,
+  CONTROL_OFF
+} ControlCommand;
 
 volatile CAN_Debug_t can_debug = {0};
 /* USER CODE END PFP */
@@ -574,9 +579,11 @@ void CreateCANMessages() {
 // Глобальные/статически переменные для плавного разгона
 static int32_t current_erpm = 0;
 static uint32_t last_update_time = 0;
+static uint32_t command_change_time = 0;
+static ControlCommand last_cmd = CONTROL_CENTER;
 
 // Настройки плавности
-const int32_t RAMP_STEP = 100;        // Шаг изменения оборотов за один вызов
+const int32_t RAMP_STEP = 50;        // Шаг изменения оборотов за один вызов
 const uint32_t RAMP_INTERVAL_MS = 10; // Интервал между шагами (10 мс)
 const int32_t ACCELERATION = 10;     // Ускорение: +10 erpm за шаг
 
@@ -585,38 +592,55 @@ const int32_t ACCELERATION = 10;     // Ускорение: +10 erpm за шаг
  * @param target_erpm - целевые обороты (-MAX_RPM, 0, MAX_RPM)
  * @return int32_t - текущие обороты с учетом плавности
  */
-int32_t smooth_erpm(int32_t target_erpm) {
-    uint32_t current_time = HAL_GetTick(); // Или другую функцию получения времени
+
+
+
+int32_t smooth_erpm(int32_t target_erpm, ControlCommand cmd) {
+    uint32_t current_time = HAL_GetTick();
     
-    // Проверяем, прошло ли достаточно времени для следующего шага
+    // Если команда изменилась - запоминаем время
+    if (cmd != last_cmd) {
+        last_cmd = cmd;
+        command_change_time = current_time;
+        current_erpm = 0;
+    }
+    
     if (current_time - last_update_time >= RAMP_INTERVAL_MS) {
         last_update_time = current_time;
         
-        if (current_erpm < target_erpm) {
-            // Увеличиваем обороты
-            current_erpm += RAMP_STEP;
-            if (current_erpm > target_erpm) current_erpm = target_erpm;
+        // Первые 100 мс после смены команды - экстренное торможение
+        uint32_t time_since_change = current_time - command_change_time;
+        bool is_emergency = (time_since_change < 100);
+        
+        int32_t diff = target_erpm - current_erpm;
+        
+        // В режиме экстренного торможения - используем большой шаг
+        int32_t step = is_emergency ? RAMP_STEP * 5 : RAMP_STEP;
+        
+        if (abs(diff) <= step) {
+            current_erpm = target_erpm;
         } 
-        else if (current_erpm > target_erpm) {
-            // Уменьшаем обороты
-            current_erpm -= RAMP_STEP;
-            if (current_erpm < target_erpm) current_erpm = target_erpm;
+        else if (diff > 0) {
+            current_erpm += step;
+            // Ограничиваем, чтобы не перескочить через ноль при смене знака
+            if ((target_erpm > 0) && (current_erpm > target_erpm)) current_erpm = target_erpm;
+            if ((target_erpm < 0) && (current_erpm > 0)) current_erpm = 0; // Стоп перед сменой
+        } 
+        else {
+            current_erpm -= step;
+            if ((target_erpm < 0) && (current_erpm < target_erpm)) current_erpm = target_erpm;
+            if ((target_erpm > 0) && (current_erpm < 0)) current_erpm = 0; // Стоп перед сменой
         }
     }
     
     return current_erpm;
 }
 
-typedef enum {
-    CONTROL_CENTER = 0,
-    CONTROL_LEFT,
-    CONTROL_RIGHT,
-    CONTROL_OFF
-} ControlCommand;
+
 
 uint32_t brake_state_last_change = 0;
 uint8_t  last_brake_state = 0;
-#define BRAKE_DEBOUNCE_TIME  2000   // 2 секунды в миллисекундах
+#define BRAKE_DEBOUNCE_TIME  3000   // 2 секунды в миллисекундах
 /**
  * Функция получения erpm на основе показаний датчика угла и команды управления
  * 
@@ -626,7 +650,10 @@ uint8_t  last_brake_state = 0;
  */
 int32_t get_erpm(uint16_t adc_value, ControlCommand control_w) {
     // Определяем допуск для центральной зоны (можно настроить)
-    const int tolerance = 30; // ±30 отсчетов АЦП
+    const int tolerance = 100; // ±30 отсчетов АЦП
+    static ControlCommand active_command = CONTROL_CENTER;
+    int32_t result = 0;
+
     
     switch(control_w) {
         case CONTROL_CENTER:
@@ -635,39 +662,47 @@ int32_t get_erpm(uint16_t adc_value, ControlCommand control_w) {
             {
                 if (adc_value > center_angle) 
                 {             
-                  erpm = smooth_erpm(-MAX_RPM);
+                  result = smooth_erpm(-MAX_RPM, control_w);
+
                 } 
                 else 
                 {
-                  erpm = smooth_erpm(MAX_RPM);
+                  result = smooth_erpm(MAX_RPM, control_w);
                 }
+            }
+            else 
+            {
+              result = smooth_erpm(0, control_w);
             }
             break;
             
         case CONTROL_LEFT:
             if (adc_value >= left_angle) 
             {
-                erpm = 0;  // Достигли упора - останавливаем
+              result = smooth_erpm(0, control_w);  // Достигли упора - останавливаем
+              result = smooth_erpm(-MAX_RPM, control_w);
             } 
             else 
             {
-              erpm = smooth_erpm(MAX_RPM);  // Двигаемся влево (отрицательные обороты)
+              result = smooth_erpm(MAX_RPM, control_w);
+              //erpm = MAX_RPM;
             }        
             break;
             
         case CONTROL_RIGHT:
             if (adc_value <= right_angle) {
-                erpm = 0;  // Достигли упора - останавливаем
+              result = smooth_erpm(0, control_w);  // Достигли упора - останавливаем
             } else {
-              erpm = smooth_erpm(-MAX_RPM); // Двигаемся влево (отрицательные обороты)
+              result = smooth_erpm(-MAX_RPM, control_w);
+              //erpm = -MAX_RPM;
             }
             break;
         case CONTROL_OFF:
-            erpm =0;
+            result = smooth_erpm(0, control_w);
             break;
     }
     
-    return 0; // По умолчанию - стоп
+    return result;// По умолчанию - стоп
 }
 
 /* USER CODE END 0 */
@@ -757,7 +792,7 @@ int main(void)
           left_brake = Read_GPIO_Pin(comp[0]); 
           right_brake = Read_GPIO_Pin(comp[1]);
 
-          uint8_t brake_state = (left_brake ? 2 : 0) | (right_brake ? 1 : 0);
+          uint8_t current_brake_state = (left_brake ? 2 : 0) | (right_brake ? 1 : 0);
 
           // brake_state:
           // 0 - оба отжаты (00)
@@ -767,31 +802,31 @@ int main(void)
 
           // /* ==================== Debounce логика ==================== */
     
-          // if (current_brake_state != last_brake_state)
-          // {
-          //     brake_state_last_change = HAL_GetTick();   // фиксируем момент изменения
-          //     last_brake_state = current_brake_state;
-          // }
+          if (current_brake_state != last_brake_state)
+          {
+              brake_state_last_change = HAL_GetTick();   // фиксируем момент изменения
+              last_brake_state = current_brake_state;
+          }
 
-          // uint8_t brake_state;   // финальное состояние, которое будем использовать
+          uint8_t brake_state;   // финальное состояние, которое будем использовать
 
-          // if (current_brake_state == 0)   // оба отпущены
-          // {
-          //     // Ждём 2 секунды стабильного состояния "оба отпущены"
-          //     if (HAL_GetTick() - brake_state_last_change >= BRAKE_DEBOUNCE_TIME)
-          //     {
-          //         brake_state = 0;        // подтверждаем нейтраль
-          //     }
-          //     else
-          //     {
-          //         brake_state = last_brake_state;  // пока держим предыдущее состояние
-          //     }
-          // }
-          // else
-          // {
-          //     // Любое нажатие рычага — сразу реагируем (без задержки)
-          //     brake_state = current_brake_state;
-          // }
+          if (current_brake_state == 0)   // оба отпущены
+          {
+              // Ждём 2 секунды стабильного состояния "оба отпущены"
+              if (HAL_GetTick() - brake_state_last_change >= BRAKE_DEBOUNCE_TIME)
+              {
+                  brake_state = 0;        // подтверждаем нейтраль
+              }
+              else
+              {
+                  brake_state = last_brake_state;  // пока держим предыдущее состояние
+              }
+          }
+          else
+          {
+              // Любое нажатие рычага — сразу реагируем (без задержки)
+              brake_state = current_brake_state;
+          }
 
           /* ==================== Основная логика ==================== */ 
           if (Read_GPIO_Pin(comp[6]) == 0){
@@ -807,13 +842,13 @@ int main(void)
                                     
                   if (switchactivity == 0) {
                     stearing_centr = 1;
-                    get_erpm(adc_b0, CONTROL_CENTER);                    
+                    erpm = get_erpm(adc_b0, CONTROL_CENTER);                    
                   }
                   break;
                   
               case 0: // Оба тормоза отжаты (!left_brake && !right_brake)
                   if (stearing_centr == 1) {
-                    get_erpm(adc_b0, CONTROL_CENTER);
+                    erpm = get_erpm(adc_b0, CONTROL_CENTER);
                   } else {
                     erpm = 0;  
                   }                                  
@@ -850,7 +885,7 @@ int main(void)
                   stearing_centr = 0;
 
                   if (switchactivity == 0) {
-                    get_erpm(adc_b0, CONTROL_LEFT);
+                    erpm = get_erpm(adc_b0, CONTROL_LEFT);
                   }
                   break;
                   
@@ -862,7 +897,7 @@ int main(void)
                   stearing_centr = 0;
 
                   if (switchactivity == 0) { 
-                    get_erpm(adc_b0, CONTROL_RIGHT);
+                    erpm = get_erpm(adc_b0, CONTROL_RIGHT);
                   }
                   break;
                   
