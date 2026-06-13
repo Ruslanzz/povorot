@@ -90,14 +90,14 @@ int32_t Vesc_GetErpm(uint16_t adc_value, ControlCommand cmd)
           result = Vesc_SmoothErpm(MAX_RPM, cmd);
         }
       } else {
-        result = Vesc_SmoothErpm(0, cmd);
+        result = 0;
       }
       break;
 
     case CONTROL_LEFT:
       /* Складываем влево, пока не достигнут левый упор. */
       if (adc_value >= LEFT_ANGLE) {
-        result = Vesc_SmoothErpm(0, cmd);   /* достигли упора — стоп */
+        result = 0;   /* достигли упора — стоп */
       } else {
         result = Vesc_SmoothErpm(MAX_RPM, cmd);
       }
@@ -106,7 +106,7 @@ int32_t Vesc_GetErpm(uint16_t adc_value, ControlCommand cmd)
     case CONTROL_RIGHT:
       /* Складываем вправо, пока не достигнут правый упор. */
       if (adc_value <= RIGHT_ANGLE) {
-        result = Vesc_SmoothErpm(0, cmd);   /* достигли упора — стоп */
+        result = 0;   /* достигли упора — стоп */
       } else {
         result = Vesc_SmoothErpm(-MAX_RPM, cmd);
       }

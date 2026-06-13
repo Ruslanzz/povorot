@@ -30,10 +30,11 @@ static void State_BrakeBoth(uint16_t adc_angle)
   control.f_r = PERIOD_BRAKE;
   control.b_r = PERIOD_BRAKE;
 
-  if (switchactivity == 0) {
-    steering_centering = 1;
-    erpm = Vesc_GetErpm(adc_angle, CONTROL_CENTER);
-  }
+  //if (switchactivity == 0) {
+  //  steering_centering = 1;
+    //erpm = Vesc_GetErpm(adc_angle, CONTROL_CENTER);
+    erpm = 0;
+  //}
 }
 
 static void State_Neutral(uint16_t adc_angle)
@@ -41,11 +42,11 @@ static void State_Neutral(uint16_t adc_angle)
   int angle_diff = (int)adc_angle - CENTER_ANGLE;
 
   /* Пока активно центрирование рамы — продолжаем его, иначе мотор стоп. */
-  if (steering_centering == 1) {
-    erpm = Vesc_GetErpm(adc_angle, CONTROL_CENTER);
-  } else {
-    erpm = 0;
-  }
+  // if (switchactivity == 0) {
+  //   steering_centering = 1;
+  //   erpm = Vesc_GetErpm(adc_angle, CONTROL_CENTER);
+  // }
+  erpm = 0;
 
   /* Дифференциал по бортам в зависимости от отклонения рамы. */
   if (angle_diff > 0) {

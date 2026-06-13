@@ -68,22 +68,22 @@ uint8_t Inputs_GetBrakeState(void)
   uint8_t right = IO_ReadPin(comp[COMP_BRAKE_RIGHT]);
   uint8_t raw   = (left ? BRAKE_LEFT : 0) | (right ? BRAKE_RIGHT : 0);
 
-  uint32_t now = HAL_GetTick();
-  if (raw != last_raw) {
-    raw_change_time = now;
-    last_raw = raw;
-  }
+  // uint32_t now = HAL_GetTick();
+  // if (raw != last_raw) {
+  //   raw_change_time = now;
+  //   last_raw = raw;
+  // }
 
-  if (raw == BRAKE_NONE) {
-    /* Подтверждаем нейтраль только после устойчивого таймаута. */
-    if (now - raw_change_time >= BRAKE_DEBOUNCE_TIME) {
-      confirmed_state = BRAKE_NONE;
-    }
-    /* иначе удерживаем предыдущее подтверждённое состояние */
-  } else {
-    /* Любое нажатие — реагируем мгновенно. */
-    confirmed_state = raw;
-  }
+  // if (raw == BRAKE_NONE) {
+  //   /* Подтверждаем нейтраль только после устойчивого таймаута. */
+  //   if (now - raw_change_time >= BRAKE_DEBOUNCE_TIME) {
+  //     confirmed_state = BRAKE_NONE;
+  //   }
+  //   /* иначе удерживаем предыдущее подтверждённое состояние */
+  // } else {
+  //   /* Любое нажатие — реагируем мгновенно. */
+  confirmed_state = raw;
+  //}
 
   return confirmed_state;
 }
