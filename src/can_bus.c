@@ -94,37 +94,46 @@ void CanBus_SendExt(uint32_t ext_id, uint8_t *data, uint8_t length)
 /* --------------------------------------------------------------------------
  * Периодическая рассылка состояния узла.
  *
- * Прим.: в исходном коде эта функция содержала switch без операторов break,
- * из-за чего все ветви выполнялись каждый вызов (а VESC отправлялся всегда,
- * независимо от роли). Поведение сделано явным: каждый тик отправляются все
- * прикладные сообщения, а кадр VESC — только в режиме ведущего.
+ * ВАЖНО: у bxCAN всего 3 почтовых ящика передачи. Если за один вызов поставить
+ * в очередь больше 3 кадров, лишние получают HAL_BUSY и теряются. Поэтому
+ * рассылка разнесена на две фазы (как и в исходном коде):
+ *   фаза 0 — comp (1 кадр);
+ *   фаза 1 — vesc + akpp + control (3 кадра, ровно умещаются в ящики).
+ * Ведомый узел шлёт только comp (остаётся в фазе 0).
  * -------------------------------------------------------------------------- */
 void CanBus_TxTask(void)
 {
-  /* Состояние дискретных входов. */
-  uint8_t data_comp[8];
-  for (uint8_t i = 0; i < 8; i++) {
-    data_comp[i] = IO_ReadPin(comp[i]);
-  }
-  CanBus_SendStd(CanBus_GenerateStdId(device_id, BASE_COMP, COMP_COUNT), data_comp, 8);
+  static uint8_t send_phase = 0;
 
-  /* Обороты мотора складывания (только ведущий). */
-  if (master) {
+  if (send_phase == 0) {
+    /* Состояние дискретных входов. */
+    uint8_t data_comp[8];
+    for (uint8_t i = 0; i < 8; i++) {
+      data_comp[i] = IO_ReadPin(comp[i]);
+    }
+    CanBus_SendStd(CanBus_GenerateStdId(device_id, BASE_COMP, COMP_COUNT), data_comp, 8);
+
+    send_phase = master ? 1 : 0;
+  }
+  else {
+    /* Обороты мотора складывания. */
     Vesc_SendRpm();
+
+    /* Положение селектора АКПП. */
+    uint8_t data_akpp[1] = { (uint8_t)Selector };
+    CanBus_SendStd(CanBus_GenerateStdId(device_id, BASE_AKPP, AKPP_COUNT), data_akpp, 1);
+
+    /* Команды интенсивности на борта. */
+    uint8_t data_control[4] = {
+      (uint8_t)control.f_r,
+      (uint8_t)control.f_l,
+      (uint8_t)control.b_r,
+      (uint8_t)control.b_l
+    };
+    CanBus_SendStd(CanBus_GenerateStdId(device_id, BASE_CONTROL, CONTROL_COUNT), data_control, 4);
+
+    send_phase = 0;
   }
-
-  /* Положение селектора АКПП. */
-  uint8_t data_akpp[1] = { (uint8_t)Selector };
-  CanBus_SendStd(CanBus_GenerateStdId(device_id, BASE_AKPP, AKPP_COUNT), data_akpp, 1);
-
-  /* Команды интенсивности на борта. */
-  uint8_t data_control[4] = {
-    (uint8_t)control.f_r,
-    (uint8_t)control.f_l,
-    (uint8_t)control.b_r,
-    (uint8_t)control.b_l
-  };
-  CanBus_SendStd(CanBus_GenerateStdId(device_id, BASE_CONTROL, CONTROL_COUNT), data_control, 4);
 }
 
 /* --------------------------------------------------------------------------
